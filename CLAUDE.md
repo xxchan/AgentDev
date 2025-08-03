@@ -34,6 +34,10 @@ xlaude 是一个用于管理 Claude 实例的命令行工具，通过 git worktr
 - 仓库名
 - 路径
 - 创建时间
+- Claude sessions（如果存在）
+  - 显示最多 3 个最近的 session
+  - 每个 session 显示：最后更新时间和最后的用户消息
+  - 超过 3 个时显示剩余数量
 
 ## 技术实现
 
