@@ -1,0 +1,70 @@
+# xlaude - Claude 实例管理工具
+
+xlaude 是一个用于管理 Claude 实例的命令行工具，通过 git worktree 实现多分支并行开发。
+
+## 核心功能
+
+### xlaude open [name]
+在项目的 base branch 上创建新的 worktree 和分支：
+- 必须在 main/master/develop 分支上执行
+- 如果不提供 name，自动从 BIP39 词库随机选择一个词
+- 创建新分支 `<name>`
+- 创建 worktree 到 `../<repo-name>-<name>` 目录
+- 自动切换到新目录并启动 `claude --dangerously-skip-permissions`
+- 继承所有环境变量
+
+### xlaude close [name]
+关闭并清理 worktree：
+- 有参数：关闭指定的 worktree
+- 无参数：关闭当前所在的 worktree
+- 检查未提交的修改和未推送的 commit
+- 需要时进行二次确认
+- 自动删除 worktree 和本地分支（如果安全）
+
+### xlaude add [name]
+将当前 worktree 添加到 xlaude 管理：
+- 必须在 git worktree 中执行
+- 如果不提供 name，默认使用当前分支名
+- 检查是否已被管理，避免重复添加
+- 适用于手动创建的 worktree 或从其他地方克隆的项目
+
+### xlaude list
+列出所有活跃的 worktree，显示：
+- 名称
+- 仓库名
+- 路径
+- 创建时间
+
+## 技术实现
+
+- 使用 Rust 开发
+- 直接调用系统 git 命令
+- 状态持久化到 `~/.config/xlaude/state.json`
+- 使用 clap 构建 CLI
+- 使用 BIP39 词库生成随机名称
+- 彩色输出和交互式确认
+
+## 使用示例
+
+```bash
+# 在 opendal 项目中创建新的工作分支
+cd opendal
+xlaude open feature-x  # 创建 ../opendal-feature-x 目录
+
+# 使用随机名称
+xlaude open  # 可能创建 ../opendal-dolphin 目录
+
+# 将已存在的 worktree 添加到管理
+cd ../opendal-bugfix
+xlaude add  # 使用当前分支名作为名称
+xlaude add hotfix  # 或指定自定义名称
+
+# 列出所有活跃的实例
+xlaude list
+
+# 关闭当前实例
+xlaude close
+
+# 关闭指定实例
+xlaude close feature-x
+```
