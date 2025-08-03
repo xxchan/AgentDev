@@ -22,14 +22,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Open a new Claude instance with a git worktree
-    Open {
+    /// Create a new git worktree
+    Create {
         /// Name for the worktree (random BIP39 word if not provided)
         name: Option<String>,
     },
-    /// Close a Claude instance and clean up its worktree
-    Close {
-        /// Name of the worktree to close (current if not provided)
+    /// Open an existing worktree and launch Claude
+    Open {
+        /// Name of the worktree to open (interactive selection if not provided)
+        name: Option<String>,
+    },
+    /// Delete a worktree and clean up
+    Delete {
+        /// Name of the worktree to delete (current if not provided)
         name: Option<String>,
     },
     /// Add current worktree to xlaude management
@@ -146,14 +151,14 @@ fn generate_random_name() -> Result<String> {
         .context("Failed to generate random name")
 }
 
-fn handle_open(name: Option<String>) -> Result<()> {
+fn handle_create(name: Option<String>) -> Result<()> {
     // Check if we're in a git repository
     let repo_name = get_repo_name()
         .context("Not in a git repository")?;
 
     // Check if we're on a base branch
     if !is_base_branch()? {
-        anyhow::bail!("Must be on a base branch (main, master, or develop) to open a new worktree");
+        anyhow::bail!("Must be on a base branch (main, master, or develop) to create a new worktree");
     }
 
     // Generate name if not provided
@@ -193,11 +198,46 @@ fn handle_open(name: Option<String>) -> Result<()> {
     );
     state.save()?;
 
-    println!("{} Worktree created at: {}", "📁".green(), worktree_path.display());
-    println!("{} Launching Claude...", "🚀".green());
+    println!("{} Worktree created at: {}", "✅".green(), worktree_path.display());
+    println!("  {} To open it, run: {} {}", "💡".cyan(), "xlaude open".cyan(), worktree_name.cyan());
+
+    Ok(())
+}
+
+fn handle_open(name: Option<String>) -> Result<()> {
+    let state = XlaudeState::load()?;
+    
+    if state.worktrees.is_empty() {
+        anyhow::bail!("No worktrees found. Create one first with 'xlaude create'");
+    }
+
+    // Determine which worktree to open
+    let worktree_name = match name {
+        Some(n) => {
+            // Verify the worktree exists
+            if !state.worktrees.contains_key(&n) {
+                anyhow::bail!("Worktree '{}' not found", n);
+            }
+            n
+        }
+        None => {
+            // Interactive selection
+            let names: Vec<&String> = state.worktrees.keys().collect();
+            let selection = dialoguer::Select::new()
+                .with_prompt("Select a worktree to open")
+                .items(&names)
+                .interact()?;
+            names[selection].clone()
+        }
+    };
+
+    let worktree_info = state.worktrees.get(&worktree_name)
+        .context("Worktree not found")?;
+
+    println!("{} Opening worktree '{}'...", "🚀".green(), worktree_name.cyan());
 
     // Change to worktree directory and launch Claude
-    std::env::set_current_dir(&worktree_path)
+    std::env::set_current_dir(&worktree_info.path)
         .context("Failed to change directory")?;
 
     let mut cmd = Command::new("claude");
@@ -216,7 +256,7 @@ fn handle_open(name: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn handle_close(name: Option<String>) -> Result<()> {
+fn handle_delete(name: Option<String>) -> Result<()> {
     let mut state = XlaudeState::load()?;
 
     // Determine which worktree to close
@@ -263,7 +303,7 @@ fn handle_close(name: Option<String>) -> Result<()> {
         }
 
         let confirmed = Confirm::new()
-            .with_prompt("Are you sure you want to close this worktree?")
+            .with_prompt("Are you sure you want to delete this worktree?")
             .default(false)
             .interact()?;
 
@@ -288,7 +328,7 @@ fn handle_close(name: Option<String>) -> Result<()> {
     state.worktrees.remove(&worktree_name);
     state.save()?;
 
-    println!("{} Worktree '{}' closed successfully", "✅".green(), worktree_name.cyan());
+    println!("{} Worktree '{}' deleted successfully", "✅".green(), worktree_name.cyan());
     Ok(())
 }
 
@@ -531,8 +571,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Create { name } => handle_create(name),
         Commands::Open { name } => handle_open(name),
-        Commands::Close { name } => handle_close(name),
+        Commands::Delete { name } => handle_delete(name),
         Commands::Add { name } => handle_add(name),
         Commands::List => handle_list(),
     }

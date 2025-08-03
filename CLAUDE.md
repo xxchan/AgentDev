@@ -4,19 +4,26 @@ xlaude 是一个用于管理 Claude 实例的命令行工具，通过 git worktr
 
 ## 核心功能
 
-### xlaude open [name]
-在项目的 base branch 上创建新的 worktree 和分支：
+### xlaude create [name]
+创建新的 worktree 和分支：
 - 必须在 main/master/develop 分支上执行
 - 如果不提供 name，自动从 BIP39 词库随机选择一个词
 - 创建新分支 `<name>`
 - 创建 worktree 到 `../<repo-name>-<name>` 目录
-- 自动切换到新目录并启动 `claude --dangerously-skip-permissions`
+- **不会自动启动 Claude**
+
+### xlaude open [name]
+打开已存在的 worktree 并启动 Claude：
+- 有参数：打开指定的 worktree
+- 无参数：显示交互式选择列表
+- 切换到 worktree 目录
+- 启动 `claude --dangerously-skip-permissions`
 - 继承所有环境变量
 
-### xlaude close [name]
-关闭并清理 worktree：
-- 有参数：关闭指定的 worktree
-- 无参数：关闭当前所在的 worktree
+### xlaude delete [name]
+删除 worktree 并清理：
+- 有参数：删除指定的 worktree
+- 无参数：删除当前所在的 worktree
 - 检查未提交的修改和未推送的 commit
 - 需要时进行二次确认
 - 自动删除 worktree 和本地分支（如果安全）
@@ -53,10 +60,14 @@ xlaude 是一个用于管理 Claude 实例的命令行工具，通过 git worktr
 ```bash
 # 在 opendal 项目中创建新的工作分支
 cd opendal
-xlaude open feature-x  # 创建 ../opendal-feature-x 目录
+xlaude create feature-x  # 创建 ../opendal-feature-x 目录
 
-# 使用随机名称
-xlaude open  # 可能创建 ../opendal-dolphin 目录
+# 使用随机名称创建
+xlaude create  # 可能创建 ../opendal-dolphin 目录
+
+# 打开并启动 Claude
+xlaude open feature-x  # 打开指定的 worktree
+xlaude open  # 交互式选择要打开的 worktree
 
 # 将已存在的 worktree 添加到管理
 cd ../opendal-bugfix
@@ -66,9 +77,15 @@ xlaude add hotfix  # 或指定自定义名称
 # 列出所有活跃的实例
 xlaude list
 
-# 关闭当前实例
-xlaude close
+# 删除当前 worktree
+xlaude delete
 
-# 关闭指定实例
-xlaude close feature-x
+# 删除指定 worktree
+xlaude delete feature-x
+
+# 典型工作流
+xlaude create my-feature  # 创建 worktree
+xlaude open my-feature   # 打开并开始工作
+# ... 工作完成后 ...
+xlaude delete my-feature # 清理 worktree
 ```
