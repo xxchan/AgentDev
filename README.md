@@ -1,0 +1,123 @@
+# xlaude
+
+A CLI tool for managing Claude instances with git worktree for parallel development workflows.
+
+## Features
+
+- **Create isolated workspaces**: Each Claude instance runs in its own git worktree
+- **Seamless switching**: Open and switch between multiple development contexts
+- **Smart cleanup**: Safely delete worktrees with uncommitted change detection
+- **Session tracking**: View Claude conversation history across instances
+- **Random naming**: Generate memorable names using BIP39 word list
+
+## Installation
+
+```bash
+cargo install xlaude
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/xuanwo/xlaude
+cd xlaude
+cargo build --release
+```
+
+## Usage
+
+### Create a new workspace
+
+```bash
+# Create with custom name
+xlaude create feature-auth
+
+# Create with random name (e.g., "dolphin", "rabbit")
+xlaude create
+```
+
+This creates a new git worktree at `../<repo>-<name>` and a corresponding branch.
+
+### Open an existing workspace
+
+```bash
+# Open specific workspace
+xlaude open feature-auth
+
+# Interactive selection
+xlaude open
+```
+
+This switches to the worktree directory and launches Claude with `--dangerously-skip-permissions`.
+
+### Add existing worktree
+
+```bash
+# Add current worktree with branch name
+cd ../myproject-bugfix
+xlaude add
+
+# Add with custom name
+xlaude add hotfix
+```
+
+### List all workspaces
+
+```bash
+xlaude list
+```
+
+Shows all managed worktrees with:
+- Name, repository, and path
+- Creation time
+- Recent Claude sessions (up to 3)
+- Last user message from each session
+
+### Delete a workspace
+
+```bash
+# Delete current workspace
+xlaude delete
+
+# Delete specific workspace
+xlaude delete feature-auth
+```
+
+Performs safety checks for:
+- Uncommitted changes
+- Unpushed commits
+- Confirms before deletion
+
+## Typical Workflow
+
+1. **Start a new feature**:
+   ```bash
+   xlaude create auth-system
+   xlaude open auth-system
+   ```
+
+2. **Work on the feature** with Claude assistance
+
+3. **Switch contexts**:
+   ```bash
+   xlaude open  # Select another workspace
+   ```
+
+4. **Clean up** when done:
+   ```bash
+   xlaude delete auth-system
+   ```
+
+## Configuration
+
+State is persisted to `~/.config/xlaude/state.json`.
+
+## Requirements
+
+- Git with worktree support
+- Claude CLI installed
+- Rust (for building from source)
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
