@@ -1,4 +1,4 @@
-# xlaude
+# xlaude - Xuanwo's Claude Code
 
 A CLI tool for managing Claude instances with git worktree for parallel development workflows.
 
