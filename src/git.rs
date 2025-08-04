@@ -21,7 +21,7 @@ pub fn get_repo_name() -> Result<String> {
     let path = Path::new(&toplevel);
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .context("Failed to get repository name")
 }
 
@@ -40,11 +40,8 @@ pub fn is_working_tree_clean() -> Result<bool> {
     Ok(status.is_empty())
 }
 
-pub fn has_unpushed_commits() -> Result<bool> {
-    match execute_git(&["log", "@{u}.."]) {
-        Ok(output) => Ok(!output.is_empty()),
-        Err(_) => Ok(false), // No upstream branch
-    }
+pub fn has_unpushed_commits() -> bool {
+    execute_git(&["log", "@{u}.."]).is_ok_and(|output| !output.is_empty())
 }
 
 pub fn is_in_worktree() -> Result<bool> {
@@ -53,7 +50,7 @@ pub fn is_in_worktree() -> Result<bool> {
     if git_path.exists() && git_path.is_file() {
         return Ok(true);
     }
-    
+
     // Alternative: check git worktree list
     match execute_git(&["rev-parse", "--git-common-dir"]) {
         Ok(common_dir) => {

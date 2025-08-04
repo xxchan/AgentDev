@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use colored::*;
+use colored::Colorize;
 use dialoguer::Confirm;
 
 use crate::git::{execute_git, has_unpushed_commits, is_working_tree_clean};
@@ -9,29 +9,35 @@ pub fn handle_delete(name: Option<String>) -> Result<()> {
     let mut state = XlaudeState::load()?;
 
     // Determine which worktree to delete
-    let worktree_name = match name {
-        Some(n) => n,
-        None => {
-            // Get current directory name to find current worktree
-            let current_dir = std::env::current_dir()?;
-            let dir_name = current_dir
-                .file_name()
-                .and_then(|n| n.to_str())
-                .context("Failed to get current directory name")?;
+    let worktree_name = if let Some(n) = name {
+        n
+    } else {
+        // Get current directory name to find current worktree
+        let current_dir = std::env::current_dir()?;
+        let dir_name = current_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .context("Failed to get current directory name")?;
 
-            // Find matching worktree
-            state.worktrees
-                .values()
-                .find(|w| w.path.file_name().and_then(|n| n.to_str()) == Some(dir_name))
-                .map(|w| w.name.clone())
-                .context("Current directory is not a managed worktree")?
-        }
+        // Find matching worktree
+        state
+            .worktrees
+            .values()
+            .find(|w| w.path.file_name().and_then(|n| n.to_str()) == Some(dir_name))
+            .map(|w| w.name.clone())
+            .context("Current directory is not a managed worktree")?
     };
 
-    let worktree_info = state.worktrees.get(&worktree_name)
+    let worktree_info = state
+        .worktrees
+        .get(&worktree_name)
         .context("Worktree not found")?;
 
-    println!("{} Checking worktree '{}'...", "🔍".yellow(), worktree_name.cyan());
+    println!(
+        "{} Checking worktree '{}'...",
+        "🔍".yellow(),
+        worktree_name.cyan()
+    );
 
     // Change to worktree directory to check status
     let original_dir = std::env::current_dir()?;
@@ -40,7 +46,7 @@ pub fn handle_delete(name: Option<String>) -> Result<()> {
 
     // Check for uncommitted changes
     let has_changes = !is_working_tree_clean()?;
-    let has_unpushed = has_unpushed_commits()?;
+    let has_unpushed = has_unpushed_commits();
 
     if has_changes || has_unpushed {
         println!();
@@ -77,6 +83,10 @@ pub fn handle_delete(name: Option<String>) -> Result<()> {
     state.worktrees.remove(&worktree_name);
     state.save()?;
 
-    println!("{} Worktree '{}' deleted successfully", "✅".green(), worktree_name.cyan());
+    println!(
+        "{} Worktree '{}' deleted successfully",
+        "✅".green(),
+        worktree_name.cyan()
+    );
     Ok(())
 }

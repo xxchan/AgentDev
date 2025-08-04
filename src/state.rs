@@ -24,10 +24,8 @@ impl XlaudeState {
     pub fn load() -> Result<Self> {
         let config_path = get_config_path()?;
         if config_path.exists() {
-            let content = fs::read_to_string(&config_path)
-                .context("Failed to read config file")?;
-            serde_json::from_str(&content)
-                .context("Failed to parse config file")
+            let content = fs::read_to_string(&config_path).context("Failed to read config file")?;
+            serde_json::from_str(&content).context("Failed to parse config file")
         } else {
             Ok(Self::default())
         }
@@ -36,13 +34,10 @@ impl XlaudeState {
     pub fn save(&self) -> Result<()> {
         let config_path = get_config_path()?;
         if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)
-                .context("Failed to create config directory")?;
+            fs::create_dir_all(parent).context("Failed to create config directory")?;
         }
-        let content = serde_json::to_string_pretty(self)
-            .context("Failed to serialize state")?;
-        fs::write(&config_path, content)
-            .context("Failed to write config file")?;
+        let content = serde_json::to_string_pretty(self).context("Failed to serialize state")?;
+        fs::write(&config_path, content).context("Failed to write config file")?;
         Ok(())
     }
 }
