@@ -6,13 +6,13 @@ description = "A CLI tool for managing Claude instances with git worktree"
 license = "Apache-2.0"
 
 [dependencies]
-clap = { version = "4.5.23", features = ["derive"] }
-serde = { version = "1.0.217", features = ["derive"] }
-serde_json = "1.0.136"
-colored = "2.2.0"
+clap = { version = "4.5.42", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.142"
+colored = "3.0.0"
 dialoguer = "0.11.0"
 directories = "5.0.1"
-chrono = { version = "0.4.39", features = ["serde"] }
+chrono = { version = "0.4.41", features = ["serde"] }
 rand = "0.8.5"
 bip39 = "2.1.0"
-anyhow = "1.0.96"
+anyhow = "1.0.98"
