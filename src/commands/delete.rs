@@ -1,0 +1,82 @@
+use anyhow::{Context, Result};
+use colored::*;
+use dialoguer::Confirm;
+
+use crate::git::{execute_git, has_unpushed_commits, is_working_tree_clean};
+use crate::state::XlaudeState;
+
+pub fn handle_delete(name: Option<String>) -> Result<()> {
+    let mut state = XlaudeState::load()?;
+
+    // Determine which worktree to delete
+    let worktree_name = match name {
+        Some(n) => n,
+        None => {
+            // Get current directory name to find current worktree
+            let current_dir = std::env::current_dir()?;
+            let dir_name = current_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .context("Failed to get current directory name")?;
+
+            // Find matching worktree
+            state.worktrees
+                .values()
+                .find(|w| w.path.file_name().and_then(|n| n.to_str()) == Some(dir_name))
+                .map(|w| w.name.clone())
+                .context("Current directory is not a managed worktree")?
+        }
+    };
+
+    let worktree_info = state.worktrees.get(&worktree_name)
+        .context("Worktree not found")?;
+
+    println!("{} Checking worktree '{}'...", "🔍".yellow(), worktree_name.cyan());
+
+    // Change to worktree directory to check status
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&worktree_info.path)
+        .context("Failed to change to worktree directory")?;
+
+    // Check for uncommitted changes
+    let has_changes = !is_working_tree_clean()?;
+    let has_unpushed = has_unpushed_commits()?;
+
+    if has_changes || has_unpushed {
+        println!();
+        if has_changes {
+            println!("{} You have uncommitted changes", "⚠️ ".red());
+        }
+        if has_unpushed {
+            println!("{} You have unpushed commits", "⚠️ ".red());
+        }
+
+        let confirmed = Confirm::new()
+            .with_prompt("Are you sure you want to delete this worktree?")
+            .default(false)
+            .interact()?;
+
+        if !confirmed {
+            println!("{} Cancelled", "❌".red());
+            return Ok(());
+        }
+    }
+
+    // Change back to original directory
+    std::env::set_current_dir(&original_dir)?;
+
+    // Remove worktree
+    println!("{} Removing worktree...", "🗑️ ".yellow());
+    execute_git(&["worktree", "remove", worktree_info.path.to_str().unwrap()])
+        .context("Failed to remove worktree")?;
+
+    // Try to delete branch (will fail if not merged)
+    let _ = execute_git(&["branch", "-d", &worktree_info.branch]);
+
+    // Update state
+    state.worktrees.remove(&worktree_name);
+    state.save()?;
+
+    println!("{} Worktree '{}' deleted successfully", "✅".green(), worktree_name.cyan());
+    Ok(())
+}
