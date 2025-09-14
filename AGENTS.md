@@ -1,6 +1,16 @@
-# xlaude - Claude 实例管理工具
+# agentdev（原 xlaude）- Claude 实例管理工具
 
-xlaude 是一个用于管理 Claude 实例的命令行工具，通过 git worktree 实现多分支并行开发。
+本工具已从 xlaude 更名为 agentdev：
+- 可执行文件名：`agentdev`
+- worktree 相关命令已收敛为二级子命令 `worktree`（别名 `wt`）
+- 兼容性：原顶层命令（create/open/delete/…）仍可用，便于平滑迁移
+
+示例映射：
+- `agentdev worktree create feature-x`（原 `xlaude create feature-x`）
+- `agentdev worktree open feature-x`（原 `xlaude open feature-x`）
+- `agentdev dashboard`（原 `xlaude dashboard`）
+
+下文旧文档中的 `xlaude …` 用法在过渡期仍有效，推荐逐步迁移到 `agentdev worktree …`。
 
 ## 核心功能
 
@@ -88,21 +98,10 @@ xlaude 是一个用于管理 Claude 实例的命令行工具，通过 git worktr
 
 ## 全局 Agent 配置
 
-`agent` 字段用于配置启动会话时使用的完整命令行（全局唯一，对 `open` 和 Dashboard 均生效）：
-
-```json
-{
-  "worktrees": { /* ... */ },
-  "editor": "zed",
-  "agent": "codex"
-}
-```
-
-说明：
+`agent` 字段用于配置启动会话时使用的完整命令行（全局唯一，对 `open` 和 Dashboard 均生效）。
 
 - 若未设置，默认值为 `claude --dangerously-skip-permissions`。
-- 该值按 shell 风格进行分词解析，支持引号；如需管道/重定向，请写成脚本后在此引用脚本路径。
-- 不支持环境变量或每仓库/每 worktree 覆盖；全局唯一。
+- 配置示例与参考请直接查看首次运行自动生成的 `~/.config/agentdev/config.toml`，无需在文档中阅读示例格式。
 
 ## 使用示例
 

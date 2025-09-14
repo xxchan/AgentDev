@@ -4,4 +4,4 @@ expression: redacted
 ---
 ✨ Creating worktree 'feature-x' with new branch 'feature-x'...
 ✅ Worktree created at: /tmp/TEST_DIR/test-repo-feature-x
-  💡 To open it, run: xlaude open feature-x
+  💡 To open it, run: agentdev worktree open feature-x

@@ -10,7 +10,7 @@ pub struct TmuxManager {
 impl TmuxManager {
     pub fn new() -> Self {
         TmuxManager {
-            session_prefix: "xlaude".to_string(),
+            session_prefix: "agentdev".to_string(),
         }
     }
 
@@ -62,6 +62,51 @@ impl TmuxManager {
         }
 
         // Configure key bindings and status bar for the session
+        self.configure_session_keys(&session_name)?;
+        self.configure_session_status(&session_name)?;
+
+        Ok(())
+    }
+
+    /// Create a session but start a specific program + args (overrides global agent).
+    pub fn create_session_with_command(
+        &self,
+        project: &str,
+        work_dir: &Path,
+        program: &str,
+        args: &[String],
+    ) -> Result<()> {
+        let session_name = self.make_session_name(project);
+
+        if self.session_exists(project) {
+            return Ok(());
+        }
+
+        let config_path = self.create_custom_config()?;
+
+        let mut tmux_args: Vec<String> = vec![
+            "-f".into(),
+            config_path.clone(),
+            "new-session".into(),
+            "-d".into(),
+            "-s".into(),
+            session_name.clone(),
+            "-c".into(),
+            work_dir.to_str().unwrap().to_string(),
+            program.to_string(),
+        ];
+        tmux_args.extend(args.iter().cloned());
+
+        let output = Command::new("tmux")
+            .args(tmux_args.iter().map(|s| s.as_str()))
+            .output()
+            .context("Failed to create tmux session")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Failed to create tmux session: {}", stderr);
+        }
+
         self.configure_session_keys(&session_name)?;
         self.configure_session_status(&session_name)?;
 
@@ -190,6 +235,61 @@ impl TmuxManager {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
+    /// Send literal text to the session's pane
+    pub fn send_text(&self, project: &str, text: &str) -> Result<()> {
+        let session_name = self.make_session_name(project);
+        let output = Command::new("tmux")
+            .args(["send-keys", "-t", &session_name, "-l", text])
+            .output()
+            .context("Failed to send text to tmux session")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Provide a friendlier error when the pane/session is missing
+            if stderr.contains("can't find pane") || stderr.contains("no such pane") {
+                anyhow::bail!(
+                    "tmux pane for session '{sess}' not found.\n\
+This usually means the agent process exited immediately (e.g., binary not found).\n\
+Tips:\n\
+- Check sessions: `tmux ls`\n\
+- Verify your agent command in the config file\n\
+- Ensure the binary exists on PATH\n\
+Original tmux error: {err}",
+                    sess = session_name,
+                    err = stderr.trim()
+                );
+            }
+            anyhow::bail!("Failed to send keys: {}", stderr.trim());
+        }
+        Ok(())
+    }
+
+    /// Send Enter key
+    pub fn send_enter(&self, project: &str) -> Result<()> {
+        let session_name = self.make_session_name(project);
+        let output = Command::new("tmux")
+            .args(["send-keys", "-t", &session_name, "Enter"])
+            .output()
+            .context("Failed to send Enter to tmux session")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("can't find pane") || stderr.contains("no such pane") {
+                anyhow::bail!(
+                    "tmux pane for session '{sess}' not found.\n\
+This usually means the agent process exited immediately (e.g., binary not found).\n\
+Tips:\n\
+- Check sessions: `tmux ls`\n\
+- Verify your agent command in the config file\n\
+- Ensure the binary exists on PATH\n\
+Original tmux error: {err}",
+                    sess = session_name,
+                    err = stderr.trim()
+                );
+            }
+            anyhow::bail!("Failed to send Enter: {}", stderr.trim());
+        }
+        Ok(())
+    }
+
     /// Configure key bindings for a specific session
     fn configure_session_keys(&self, session_name: &str) -> Result<()> {
         // Set Ctrl+Q to detach (session-specific)
@@ -275,8 +375,11 @@ impl TmuxManager {
             .output()?;
 
         // Set left section with project name
-        let project = session_name.strip_prefix("xlaude_").unwrap_or(session_name);
-        let left_text = format!(" 📂 xlaude: {} ", project.replace('_', "-"));
+        let project = session_name
+            .strip_prefix("agentdev_")
+            .or_else(|| session_name.strip_prefix("xlaude_"))
+            .unwrap_or(session_name);
+        let left_text = format!(" 📂 agentdev: {} ", project.replace('_', "-"));
         Command::new("tmux")
             .args(["set-option", "-t", session_name, "status-left", &left_text])
             .output()?;
@@ -337,7 +440,7 @@ impl TmuxManager {
 set -g status on
 set -g status-position top
 set -g status-style "bg=colour238,fg=colour250"
-set -g status-left " 📂 xlaude "
+set -g status-left " 📂 agentdev "
 set -g status-right " Ctrl+T: Terminal | Ctrl+O: Editor | Ctrl+Q: Dashboard "
 set -g status-left-length 50
 set -g status-right-length 50

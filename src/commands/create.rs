@@ -252,6 +252,7 @@ pub fn handle_create_in_dir_quiet(
             path: worktree_path.clone(),
             repo_name,
             created_at: Utc::now(),
+            task_id: None,
         },
     );
     state.save()?;
@@ -273,7 +274,7 @@ pub fn handle_create_in_dir_quiet(
             println!(
                 "  {} To open it, run: {} {}",
                 "💡".cyan(),
-                "xlaude open".cyan(),
+                "agentdev worktree open".cyan(),
                 worktree_name.cyan()
             );
             false
@@ -287,7 +288,7 @@ pub fn handle_create_in_dir_quiet(
             println!(
                 "  {} To open it later, run: {} {}",
                 "💡".cyan(),
-                "xlaude open".cyan(),
+                "agentdev worktree open".cyan(),
                 worktree_name.cyan()
             );
         }

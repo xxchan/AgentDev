@@ -13,6 +13,8 @@ pub struct WorktreeInfo {
     pub path: PathBuf,
     pub repo_name: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -70,6 +72,22 @@ impl XlaudeState {
             // ============================================================================
             // END OF MIGRATION LOGIC
             // ============================================================================
+
+            // MIGRATION: Ensure task_id exists; default to worktree name for grouping
+            let mut changed = false;
+            for (k, info) in state.worktrees.iter_mut() {
+                if info.task_id.is_none() {
+                    info.task_id = Some(info.name.clone());
+                    changed = true;
+                }
+                // Ensure key format is repo/name (already migrated above)
+                if !k.contains('/') {
+                    changed = true; // Already handled in prior migration, keep flag here
+                }
+            }
+            if changed {
+                let _ = state.save();
+            }
 
             Ok(state)
         } else {

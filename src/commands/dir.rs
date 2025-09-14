@@ -7,7 +7,7 @@ pub fn handle_dir(name: Option<String>) -> Result<()> {
     let state = XlaudeState::load()?;
 
     if state.worktrees.is_empty() {
-        anyhow::bail!("No worktrees found. Create one first with 'xlaude create'");
+        anyhow::bail!("No worktrees found. Create one first with 'agentdev worktree create'");
     }
 
     // Get name from CLI args or pipe

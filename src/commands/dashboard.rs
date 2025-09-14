@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -13,9 +15,11 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::claude_status::{ClaudeStatus, ClaudeStatusDetector};
+use crate::commands::{handle_delete, handle_delete_task};
+use crate::git::get_diff_for_path;
 use crate::state::XlaudeState;
 use crate::tmux::{SessionInfo, TmuxManager};
 
@@ -38,6 +42,26 @@ pub struct Dashboard {
     claude_statuses: std::collections::HashMap<String, ClaudeStatus>,
     config_mode: bool,
     config_editor_input: String,
+    // Map list indices that are headers to their task_id
+    header_task_map: std::collections::HashMap<usize, String>,
+    // Vertical scroll offset for the preview pane
+    preview_scroll: u16,
+    // Last preview area for mouse targeting
+    preview_area: Option<Rect>,
+    // Debug toggles and metrics
+    debug_mode: bool,
+    dbg_last_frame_ms: u128,
+    dbg_recent_lines: usize,
+    dbg_diff_lines: usize,
+    dbg_total_lines: usize,
+    dbg_tmux_capture_ms: Option<u128>,
+    dbg_tmux_throttled: bool,
+    dbg_mouse_scroll_count: u32,
+    dbg_mouse_window_start: Instant,
+    // Cache raw diff text per worktree key (styled at render time)
+    diff_cache: std::collections::HashMap<String, String>,
+    // Throttle live tmux capture per worktree name
+    preview_last_capture: std::collections::HashMap<String, std::time::Instant>,
 }
 
 struct WorktreeDisplay {
@@ -46,9 +70,60 @@ struct WorktreeDisplay {
     key: String,
     has_session: bool,
     claude_status: ClaudeStatus,
+    task_id: String,
 }
 
 impl Dashboard {
+    fn current_selected_worktree_name(&self) -> String {
+        if let Some(Some(idx)) = self.list_index_map.get(self.selected)
+            && let Some(w) = self.worktrees.get(*idx)
+        {
+            return w.name.clone();
+        }
+        String::new()
+    }
+    fn style_diff_lines(diff: &str, max_lines: usize) -> Vec<Line<'static>> {
+        let mut out = Vec::new();
+        for ln in diff.lines().take(max_lines) {
+            let line = if ln.starts_with("+++") || ln.starts_with("---") {
+                Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default().fg(Color::DarkGray),
+                ))
+            } else if ln.starts_with("diff ") {
+                Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ))
+            } else if ln.starts_with("index ") {
+                Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default().fg(Color::DarkGray),
+                ))
+            } else if ln.starts_with("@@") {
+                Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default().fg(Color::Yellow),
+                ))
+            } else if ln.starts_with('+') {
+                Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default().fg(Color::Green),
+                ))
+            } else if ln.starts_with('-') {
+                Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default().fg(Color::Red),
+                ))
+            } else {
+                Line::from(ln.to_string())
+            };
+            out.push(line);
+        }
+        out
+    }
     pub fn new() -> Result<Self> {
         let tmux = TmuxManager::new();
         let state = XlaudeState::load()?;
@@ -73,6 +148,20 @@ impl Dashboard {
             claude_statuses: std::collections::HashMap::new(),
             config_mode: false,
             config_editor_input: String::new(),
+            header_task_map: std::collections::HashMap::new(),
+            preview_scroll: 0,
+            preview_area: None,
+            debug_mode: false,
+            dbg_last_frame_ms: 0,
+            dbg_recent_lines: 0,
+            dbg_diff_lines: 0,
+            dbg_total_lines: 0,
+            dbg_tmux_capture_ms: None,
+            dbg_tmux_throttled: false,
+            dbg_mouse_scroll_count: 0,
+            dbg_mouse_window_start: Instant::now(),
+            diff_cache: std::collections::HashMap::new(),
+            preview_last_capture: std::collections::HashMap::new(),
         };
 
         dashboard.refresh_worktrees();
@@ -83,6 +172,7 @@ impl Dashboard {
 
     fn refresh_worktrees(&mut self) {
         self.worktrees.clear();
+        self.header_task_map.clear();
 
         // Collect all valid worktree names for cleanup
         let valid_worktree_names: std::collections::HashSet<String> = self
@@ -145,12 +235,13 @@ impl Dashboard {
                     .get(&info.name)
                     .cloned()
                     .unwrap_or(ClaudeStatus::NotRunning),
+                task_id: info.task_id.clone().unwrap_or_else(|| info.name.clone()),
             });
         }
 
-        // Sort by repo and name
+        // Sort by task then name for stable grouping
         self.worktrees
-            .sort_by(|a, b| a.repo.cmp(&b.repo).then(a.name.cmp(&b.name)));
+            .sort_by(|a, b| a.task_id.cmp(&b.task_id).then(a.name.cmp(&b.name)));
     }
 
     pub fn refresh(&mut self) -> Result<()> {
@@ -200,7 +291,7 @@ impl Dashboard {
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -211,7 +302,11 @@ impl Dashboard {
 
         // Restore terminal
         disable_raw_mode()?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(
+            terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
         terminal.show_cursor()?;
 
         result
@@ -219,7 +314,9 @@ impl Dashboard {
 
     fn run_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         loop {
+            let frame_start = Instant::now();
             terminal.draw(|f| self.render(f))?;
+            self.dbg_last_frame_ms = frame_start.elapsed().as_millis();
 
             // Clear status message after a few renders
             if self.status_message.is_some() {
@@ -232,13 +329,17 @@ impl Dashboard {
 
             // Handle events with shorter timeout for more responsive updates
             if event::poll(Duration::from_millis(500))? {
-                if let Event::Key(key) = event::read()? {
-                    match self.handle_input(key)? {
+                match event::read()? {
+                    Event::Key(key) => match self.handle_input(key)? {
                         InputResult::Exit => break,
                         InputResult::Attach(project) => {
                             // Clean up terminal before attaching
                             disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                            execute!(
+                                terminal.backend_mut(),
+                                DisableMouseCapture,
+                                LeaveAlternateScreen
+                            )?;
                             terminal.show_cursor()?;
 
                             // Attach to tmux session
@@ -248,13 +349,83 @@ impl Dashboard {
 
                             // Restore terminal after detach
                             enable_raw_mode()?;
-                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                            execute!(
+                                terminal.backend_mut(),
+                                EnterAlternateScreen,
+                                EnableMouseCapture
+                            )?;
                             terminal.hide_cursor()?;
 
                             // Force clear and redraw
                             terminal.clear()?;
 
                             // Refresh state after returning
+                            self.refresh()?;
+                        }
+                        InputResult::DeleteWorktree(name) => {
+                            // Leave TUI to run deletion safely
+                            disable_raw_mode()?;
+                            execute!(
+                                terminal.backend_mut(),
+                                DisableMouseCapture,
+                                LeaveAlternateScreen
+                            )?;
+                            terminal.show_cursor()?;
+
+                            let res = handle_delete(Some(name.clone()));
+
+                            enable_raw_mode()?;
+                            execute!(
+                                terminal.backend_mut(),
+                                EnterAlternateScreen,
+                                EnableMouseCapture
+                            )?;
+                            terminal.hide_cursor()?;
+                            terminal.clear()?;
+
+                            match res {
+                                Ok(_) => {
+                                    self.status_message =
+                                        Some(format!("✅ Deleted worktree: {}", name));
+                                    self.status_message_timer = 5;
+                                }
+                                Err(e) => {
+                                    self.status_message = Some(format!("❌ Delete failed: {}", e));
+                                    self.status_message_timer = 8;
+                                }
+                            }
+                            self.refresh()?;
+                        }
+                        InputResult::DeleteTask(task) => {
+                            disable_raw_mode()?;
+                            execute!(
+                                terminal.backend_mut(),
+                                DisableMouseCapture,
+                                LeaveAlternateScreen
+                            )?;
+                            terminal.show_cursor()?;
+
+                            let res = handle_delete_task(task.clone());
+
+                            enable_raw_mode()?;
+                            execute!(
+                                terminal.backend_mut(),
+                                EnterAlternateScreen,
+                                EnableMouseCapture
+                            )?;
+                            terminal.hide_cursor()?;
+                            terminal.clear()?;
+
+                            match res {
+                                Ok(_) => {
+                                    self.status_message = Some("✅ Deleted task".to_string());
+                                    self.status_message_timer = 5;
+                                }
+                                Err(e) => {
+                                    self.status_message = Some(format!("❌ Delete failed: {}", e));
+                                    self.status_message_timer = 8;
+                                }
+                            }
                             self.refresh()?;
                         }
                         InputResult::CreateWorktree(name, repo) => {
@@ -321,11 +492,53 @@ impl Dashboard {
                             self.status_message_timer = 5; // Show for 5 seconds
                         }
                         InputResult::Continue => {}
+                    },
+                    Event::Mouse(me) => {
+                        if let Some(area) = self.preview_area {
+                            // crossterm uses 1-based coordinates
+                            let x = me.column.saturating_sub(1);
+                            let y = me.row.saturating_sub(1);
+                            let in_preview = x >= area.x
+                                && x < area.x + area.width
+                                && y >= area.y
+                                && y < area.y + area.height;
+                            if in_preview {
+                                match me.kind {
+                                    MouseEventKind::ScrollDown => {
+                                        self.preview_scroll = self.preview_scroll.saturating_add(3);
+                                        // debug: count wheel events per second
+                                        let now = Instant::now();
+                                        if now.duration_since(self.dbg_mouse_window_start)
+                                            >= Duration::from_secs(1)
+                                        {
+                                            self.dbg_mouse_window_start = now;
+                                            self.dbg_mouse_scroll_count = 0;
+                                        }
+                                        self.dbg_mouse_scroll_count =
+                                            self.dbg_mouse_scroll_count.saturating_add(1);
+                                    }
+                                    MouseEventKind::ScrollUp => {
+                                        self.preview_scroll = self.preview_scroll.saturating_sub(3);
+                                        let now = Instant::now();
+                                        if now.duration_since(self.dbg_mouse_window_start)
+                                            >= Duration::from_secs(1)
+                                        {
+                                            self.dbg_mouse_window_start = now;
+                                            self.dbg_mouse_scroll_count = 0;
+                                        }
+                                        self.dbg_mouse_scroll_count =
+                                            self.dbg_mouse_scroll_count.saturating_add(1);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                     }
+                    _ => {}
                 }
             } else {
-                // Auto-refresh every 500ms for better responsiveness
-                self.refresh()?;
+                // No automatic heavy refresh to keep scrolling smooth.
+                // Live preview/status for the selected session is handled in render with throttling.
             }
         }
 
@@ -415,35 +628,36 @@ impl Dashboard {
                 self.show_help = true;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                // Move up, skipping repository headers
                 if self.selected > 0 {
-                    let mut prev = self.selected - 1;
-                    loop {
-                        if self.list_index_map[prev].is_some() {
-                            // Found a selectable item
-                            self.selected = prev;
-                            self.list_state.select(Some(self.selected));
-                            break;
-                        }
-                        if prev == 0 {
-                            break;
-                        }
-                        prev -= 1;
-                    }
+                    self.selected -= 1;
+                    self.list_state.select(Some(self.selected));
+                    self.preview_scroll = 0;
+                    self.preview_last_capture
+                        .remove(&self.current_selected_worktree_name());
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                // Move down, skipping repository headers
-                let mut next = self.selected + 1;
-                while next < self.list_index_map.len() {
-                    if self.list_index_map[next].is_some() {
-                        // Found a selectable item
-                        self.selected = next;
-                        self.list_state.select(Some(self.selected));
-                        break;
-                    }
-                    next += 1;
+                if self.selected + 1 < self.list_index_map.len() {
+                    self.selected += 1;
+                    self.list_state.select(Some(self.selected));
+                    self.preview_scroll = 0;
+                    self.preview_last_capture
+                        .remove(&self.current_selected_worktree_name());
                 }
+            }
+            KeyCode::PageDown | KeyCode::Char('J') => {
+                // Scroll preview down by a chunk
+                let inc: u16 = 5;
+                // saturating add to avoid overflow
+                self.preview_scroll = self.preview_scroll.saturating_add(inc);
+            }
+            KeyCode::PageUp | KeyCode::Char('K') => {
+                // Scroll preview up by a chunk
+                let dec: u16 = 5;
+                self.preview_scroll = self.preview_scroll.saturating_sub(dec);
+            }
+            KeyCode::Home => {
+                self.preview_scroll = 0;
             }
             KeyCode::Enter => {
                 // Get the actual worktree index from the mapping
@@ -452,6 +666,7 @@ impl Dashboard {
                 {
                     return Ok(InputResult::Attach(worktree.name.clone()));
                 }
+                // If a header (task) is selected, do nothing (preview will show combined diff)
             }
             KeyCode::Char('n' | 'N') => {
                 // Enter create mode with dialog
@@ -469,19 +684,23 @@ impl Dashboard {
                 }
             }
             KeyCode::Char('d' | 'D') => {
-                // Get the actual worktree index from the mapping
+                // Worktree selected -> delete worktree; Task header selected -> delete task
                 if let Some(Some(worktree_idx)) = self.list_index_map.get(self.selected)
                     && let Some(worktree) = self.worktrees.get(*worktree_idx)
                 {
-                    // Kill tmux session if exists
-                    if worktree.has_session {
-                        self.tmux.kill_session(&worktree.name)?;
-                    }
-                    self.refresh()?;
+                    return Ok(InputResult::DeleteWorktree(worktree.name.clone()));
+                } else if let Some(task) = self.header_task_map.get(&self.selected) {
+                    return Ok(InputResult::DeleteTask(task.clone()));
                 }
             }
             KeyCode::Char('r' | 'R') => {
                 self.refresh()?;
+                self.preview_scroll = 0;
+                self.diff_cache.clear();
+                self.preview_last_capture.clear();
+            }
+            KeyCode::Char('g' | 'G') => {
+                self.debug_mode = !self.debug_mode;
             }
             KeyCode::Char('c') | KeyCode::Char('C') => {
                 // Enter config mode
@@ -543,7 +762,7 @@ impl Dashboard {
             .split(f.area());
 
         // Menu bar (matching tmux style)
-        let menu_bar = Paragraph::new(" 📂 xlaude: Dashboard").style(
+        let menu_bar = Paragraph::new(" 📂 agentdev: Dashboard").style(
             Style::default()
                 .bg(Color::Rgb(68, 68, 68))
                 .fg(Color::Rgb(250, 250, 250)),
@@ -563,6 +782,7 @@ impl Dashboard {
         self.render_project_list(f, main_chunks[0]);
 
         // Preview pane
+        self.preview_area = Some(main_chunks[1]);
         self.render_preview(f, main_chunks[1]);
 
         // Help/Status bar
@@ -582,45 +802,115 @@ impl Dashboard {
             f.render_widget(status_widget, help_chunks[0]);
 
             // Show help bar
-            let help = Paragraph::new(Line::from(vec![
+            let mut spans = vec![
                 Span::raw(" "),
                 Span::styled("Enter", Style::default().fg(Color::Yellow)),
                 Span::raw(" Open  "),
                 Span::styled("n", Style::default().fg(Color::Yellow)),
                 Span::raw(" New  "),
                 Span::styled("d", Style::default().fg(Color::Yellow)),
-                Span::raw(" Stop  "),
+                Span::raw(" Delete  "),
                 Span::styled("c", Style::default().fg(Color::Yellow)),
                 Span::raw(" Config  "),
                 Span::styled("r", Style::default().fg(Color::Yellow)),
                 Span::raw(" Refresh  "),
+                Span::styled("Mouse/Shift+J/K", Style::default().fg(Color::Yellow)),
+                Span::raw(" Scroll right pane  "),
+                Span::styled("g", Style::default().fg(Color::Yellow)),
+                Span::raw(" Debug  "),
                 Span::styled("?", Style::default().fg(Color::Yellow)),
                 Span::raw(" Help  "),
                 Span::styled("q", Style::default().fg(Color::Yellow)),
                 Span::raw(" Quit "),
-            ]))
-            .style(Style::default().fg(Color::DarkGray));
+            ];
+            if self.debug_mode {
+                let wheel_elapsed =
+                    Instant::now().saturating_duration_since(self.dbg_mouse_window_start);
+                let wheel_rate = if wheel_elapsed.as_millis() > 0 {
+                    (self.dbg_mouse_scroll_count as u128 * 1000 / wheel_elapsed.as_millis()) as u64
+                } else {
+                    0
+                };
+                let tmux_info = if let Some(ms) = self.dbg_tmux_capture_ms {
+                    if self.dbg_tmux_throttled {
+                        format!("{}ms thr", ms)
+                    } else {
+                        format!("{}ms", ms)
+                    }
+                } else if self.dbg_tmux_throttled {
+                    "thr".to_string()
+                } else {
+                    "-".to_string()
+                };
+                let dbg_str = format!(
+                    " | Dbg: frame {}ms lines {} (out {}, diff {}) tmux {} wheel {}/s",
+                    self.dbg_last_frame_ms,
+                    self.dbg_total_lines,
+                    self.dbg_recent_lines,
+                    self.dbg_diff_lines,
+                    tmux_info,
+                    wheel_rate
+                );
+                spans.push(Span::raw(dbg_str));
+            }
+            let help =
+                Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray));
             f.render_widget(help, help_chunks[1]);
         } else {
             // Just show help bar
-            let help = Paragraph::new(Line::from(vec![
+            let mut spans = vec![
                 Span::raw(" "),
                 Span::styled("Enter", Style::default().fg(Color::Yellow)),
                 Span::raw(" Open  "),
                 Span::styled("n", Style::default().fg(Color::Yellow)),
                 Span::raw(" New  "),
                 Span::styled("d", Style::default().fg(Color::Yellow)),
-                Span::raw(" Stop  "),
+                Span::raw(" Delete  "),
                 Span::styled("c", Style::default().fg(Color::Yellow)),
                 Span::raw(" Config  "),
                 Span::styled("r", Style::default().fg(Color::Yellow)),
                 Span::raw(" Refresh  "),
+                Span::styled("Mouse/Shift+J/K", Style::default().fg(Color::Yellow)),
+                Span::raw(" Scroll right pane  "),
+                Span::styled("g", Style::default().fg(Color::Yellow)),
+                Span::raw(" Debug  "),
                 Span::styled("?", Style::default().fg(Color::Yellow)),
                 Span::raw(" Help  "),
                 Span::styled("q", Style::default().fg(Color::Yellow)),
                 Span::raw(" Quit "),
-            ]))
-            .style(Style::default().fg(Color::DarkGray));
+            ];
+            if self.debug_mode {
+                let wheel_elapsed =
+                    Instant::now().saturating_duration_since(self.dbg_mouse_window_start);
+                let wheel_rate = if wheel_elapsed.as_millis() > 0 {
+                    (self.dbg_mouse_scroll_count as u128 * 1000 / wheel_elapsed.as_millis()) as u64
+                } else {
+                    0
+                };
+                let tmux_info = if let Some(ms) = self.dbg_tmux_capture_ms {
+                    if self.dbg_tmux_throttled {
+                        format!("{}ms thr", ms)
+                    } else {
+                        format!("{}ms", ms)
+                    }
+                } else if self.dbg_tmux_throttled {
+                    "thr".to_string()
+                } else {
+                    "-".to_string()
+                };
+                let dbg_str = format!(
+                    " | Dbg: frame {}ms lines {} (out {}, diff {}) tmux {} wheel {}/s",
+                    self.dbg_last_frame_ms,
+                    self.dbg_total_lines,
+                    self.dbg_recent_lines,
+                    self.dbg_diff_lines,
+                    tmux_info,
+                    wheel_rate
+                );
+                spans.push(Span::raw(dbg_str));
+            }
+            let help =
+                Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray));
             f.render_widget(help, chunks[2]);
         }
 
@@ -637,63 +927,87 @@ impl Dashboard {
 
     fn render_project_list(&mut self, f: &mut Frame, area: Rect) {
         let mut items = Vec::new();
-        let mut current_repo = String::new();
         self.list_index_map.clear();
+        self.header_task_map.clear();
 
-        for (worktree_idx, worktree) in self.worktrees.iter().enumerate() {
-            // Add repo header if changed
-            if worktree.repo != current_repo {
-                current_repo = worktree.repo.clone();
-                items.push(ListItem::new(Line::from(vec![Span::styled(
-                    format!("📁 {}", current_repo),
-                    Style::default()
-                        .fg(Color::Blue)
-                        .add_modifier(Modifier::BOLD),
-                )])));
-                self.list_index_map.push(None); // Header has no worktree
+        // Group by task_id
+        let mut groups: std::collections::BTreeMap<String, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (idx, wt) in self.worktrees.iter().enumerate() {
+            groups.entry(wt.task_id.clone()).or_default().push(idx);
+        }
+
+        for (task, members) in groups {
+            // Task header
+            items.push(ListItem::new(Line::from(vec![Span::styled(
+                format!("🧩 {}", task),
+                Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::BOLD),
+            )])));
+            let header_index = items.len() - 1;
+            self.list_index_map.push(None);
+            self.header_task_map.insert(header_index, task.clone());
+
+            for worktree_idx in members {
+                let worktree = &self.worktrees[worktree_idx];
+                let (status, status_color) = if !worktree.has_session {
+                    ("◌", Color::DarkGray)
+                } else {
+                    (
+                        worktree.claude_status.display_icon(),
+                        worktree.claude_status.color(),
+                    )
+                };
+
+                // Try to display just agent alias if name is task-alias
+                let display = if let Some(rest) = worktree.name.strip_prefix(&format!("{}-", task))
+                {
+                    rest.to_string()
+                } else {
+                    worktree.name.clone()
+                };
+
+                let item = Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(status, Style::default().fg(status_color)),
+                    Span::raw(" "),
+                    Span::raw(display),
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("({})", worktree.repo),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]);
+                items.push(ListItem::new(item));
+                self.list_index_map.push(Some(worktree_idx));
             }
-
-            // Status icon based on Claude status
-            let (status, status_color) = if !worktree.has_session {
-                ("◌", Color::DarkGray)
-            } else {
-                (
-                    worktree.claude_status.display_icon(),
-                    worktree.claude_status.color(),
-                )
-            };
-
-            // Build item
-            let item = Line::from(vec![
-                Span::raw("  "),
-                Span::styled(status, Style::default().fg(status_color)),
-                Span::raw(" "),
-                Span::raw(&worktree.name),
-            ]);
-
-            items.push(ListItem::new(item));
-            self.list_index_map.push(Some(worktree_idx)); // Map to actual worktree
         }
 
         let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Projects (↑↓ to navigate) "),
+                    .title(" Tasks (↑↓ to navigate) "),
             )
             .highlight_style(Style::default().bg(Color::DarkGray))
             .highlight_symbol("> ");
 
-        f.render_stateful_widget(list, area, &mut self.list_state.clone());
+        f.render_stateful_widget(list, area, &mut self.list_state);
     }
 
-    fn render_preview(&self, f: &mut Frame, area: Rect) {
+    fn render_preview(&mut self, f: &mut Frame, area: Rect) {
         // Get the actual worktree from mapping
         let worktree_idx = self.list_index_map.get(self.selected).and_then(|idx| *idx);
 
         if let Some(idx) = worktree_idx
             && let Some(worktree) = self.worktrees.get(idx)
         {
+            // reset debug counters for this frame
+            self.dbg_recent_lines = 0;
+            self.dbg_diff_lines = 0;
+            self.dbg_tmux_capture_ms = None;
+            self.dbg_tmux_throttled = false;
             let mut lines = vec![
                 Line::from(vec![
                     Span::styled("Project: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -716,6 +1030,31 @@ impl Dashboard {
                 .iter()
                 .find(|s| s.project == safe_name || s.project == worktree.name)
             {
+                // Try to fetch live pane output for selected background session
+                let mut display_status = worktree.claude_status.clone();
+                let mut live_preview: Option<String> = None;
+                if !session.is_attached {
+                    let now = Instant::now();
+                    let should_capture = self
+                        .preview_last_capture
+                        .get(&worktree.name)
+                        .map(|t| now.duration_since(*t) >= Duration::from_millis(200))
+                        .unwrap_or(true);
+                    if should_capture {
+                        let cap_start = Instant::now();
+                        if let Ok(output) = self.tmux.capture_pane(&worktree.name, 100) {
+                            display_status = self.status_detector.analyze_output(&output);
+                            self.preview_cache
+                                .insert(worktree.name.clone(), output.clone());
+                            self.preview_last_capture.insert(worktree.name.clone(), now);
+                            live_preview = Some(output);
+                            self.dbg_tmux_capture_ms = Some(cap_start.elapsed().as_millis());
+                        }
+                    } else {
+                        self.dbg_tmux_throttled = true;
+                    }
+                }
+
                 // Show both session status and Claude status
                 lines.push(Line::from(vec![
                     Span::styled("Session: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -734,14 +1073,14 @@ impl Dashboard {
                 ]));
 
                 lines.push(Line::from(vec![
-                    Span::styled("Claude: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled("Status: ", Style::default().add_modifier(Modifier::BOLD)),
                     Span::styled(
                         format!(
                             "{} {}",
-                            worktree.claude_status.display_icon(),
-                            worktree.claude_status.display_text()
+                            display_status.display_icon(),
+                            display_status.display_text()
                         ),
-                        Style::default().fg(worktree.claude_status.color()),
+                        Style::default().fg(display_status.color()),
                     ),
                 ]));
                 lines.push(Line::from(vec![
@@ -757,9 +1096,10 @@ impl Dashboard {
                 ]));
                 lines.push(Line::from(""));
 
-                // Show preview if available
+                // Show preview if available (prefer live capture, fallback to cache)
                 if !session.is_attached
-                    && let Some(preview) = self.preview_cache.get(&worktree.name)
+                    && let Some(ref preview) =
+                        live_preview.or_else(|| self.preview_cache.get(&worktree.name).cloned())
                 {
                     lines.push(Line::from(Span::styled(
                         "Recent output:",
@@ -767,7 +1107,9 @@ impl Dashboard {
                     )));
                     lines.push(Line::from("─".repeat(area.width as usize - 2)));
 
-                    for line in preview.lines().take(10) {
+                    // Show captured output (up to tmux capture limit)
+                    for line in preview.lines() {
+                        self.dbg_recent_lines += 1;
                         lines.push(Line::from(line.to_string()));
                     }
                 }
@@ -785,11 +1127,137 @@ impl Dashboard {
                 )));
             }
 
+            // Always show git diff for this worktree (colored), regardless of session state
+            if let Some(info) = self.state.worktrees.get(&worktree.key) {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Diff:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from("─".repeat(area.width as usize - 2)));
+                let diff_text = if let Some(cached) = self.diff_cache.get(&worktree.key) {
+                    cached.clone()
+                } else {
+                    match get_diff_for_path(&info.path) {
+                        Ok(diff) => {
+                            self.diff_cache.insert(worktree.key.clone(), diff.clone());
+                            diff
+                        }
+                        Err(_) => String::new(),
+                    }
+                };
+
+                if diff_text.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "(no changes)",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else {
+                    let mut styled = Self::style_diff_lines(&diff_text, 200);
+                    self.dbg_diff_lines = styled.len();
+                    lines.append(&mut styled);
+                }
+            }
+
+            // record total lines before moving into Paragraph
+            self.dbg_total_lines = lines.len();
+
             let preview = Paragraph::new(lines)
                 .block(Block::default().borders(Borders::ALL).title(" Details "))
-                .wrap(Wrap { trim: true });
+                .wrap(Wrap { trim: true })
+                .scroll((self.preview_scroll, 0));
 
             f.render_widget(preview, area);
+        } else {
+            // Header selected: show aggregated diffs for this task
+            if let Some(task) = self.header_task_map.get(&self.selected) {
+                let mut lines: Vec<Line> = Vec::new();
+                lines.push(Line::from(vec![Span::styled(
+                    format!("Task: {} — Combined diffs", task),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )]));
+                lines.push(Line::from(""));
+
+                // Collect members for this task
+                let members: Vec<&WorktreeDisplay> = self
+                    .worktrees
+                    .iter()
+                    .filter(|w| &w.task_id == task)
+                    .collect();
+
+                // Performance: cap total styled diff lines across all members
+                let total_cap: usize = 250; // overall budget across task
+                let per_member_cap: usize = 80; // per worktree budget
+                let mut used: usize = 0;
+
+                for m in members {
+                    if used >= total_cap {
+                        break;
+                    }
+                    // Find path from state
+                    if let Some(info) = self.state.worktrees.get(&m.key) {
+                        let alias = if let Some(rest) = m.name.strip_prefix(&format!("{}-", task)) {
+                            rest.to_string()
+                        } else {
+                            m.name.clone()
+                        };
+
+                        lines.push(Line::from(Span::styled(
+                            format!("== {} ==", alias),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        )));
+
+                        // Get diff text from cache or compute once
+                        let diff_text = if let Some(cached) = self.diff_cache.get(&m.key) {
+                            cached.clone()
+                        } else {
+                            match get_diff_for_path(&info.path) {
+                                Ok(diff) => {
+                                    self.diff_cache.insert(m.key.clone(), diff.clone());
+                                    diff
+                                }
+                                Err(_) => String::new(),
+                            }
+                        };
+
+                        if diff_text.is_empty() {
+                            lines.push(Line::from(Span::styled(
+                                "(no changes)",
+                                Style::default().fg(Color::DarkGray),
+                            )));
+                        } else {
+                            let remaining = total_cap.saturating_sub(used);
+                            let take = remaining.min(per_member_cap);
+                            let mut styled = Self::style_diff_lines(&diff_text, take);
+                            used += styled.len();
+                            lines.append(&mut styled);
+                        }
+                        lines.push(Line::from(""));
+                    }
+                }
+
+                // Debug: record diff lines used in aggregated view
+                self.dbg_diff_lines = used;
+                self.dbg_total_lines = lines.len();
+
+                // If truncated, add a hint
+                if used >= total_cap {
+                    lines.push(Line::from(Span::styled(
+                        "(truncated — open a worktree for full diff)",
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    )));
+                }
+
+                let preview = Paragraph::new(lines)
+                    .block(Block::default().borders(Borders::ALL).title(" Preview "))
+                    .wrap(Wrap { trim: true })
+                    .scroll((self.preview_scroll, 0));
+                f.render_widget(preview, area);
+            }
         }
     }
 
@@ -797,7 +1265,7 @@ impl Dashboard {
         let help_text = vec![
             Line::from(""),
             Line::from(Span::styled(
-                "xlaude dashboard - Help",
+                "agentdev dashboard - Help",
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
@@ -820,6 +1288,16 @@ impl Dashboard {
                 Span::styled("Enter", Style::default().fg(Color::Yellow)),
                 Span::raw("  Open selected project"),
             ]),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled("Shift+J", Style::default().fg(Color::Yellow)),
+                Span::raw("  Scroll preview (right) down"),
+            ]),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled("Shift+K", Style::default().fg(Color::Yellow)),
+                Span::raw("  Scroll preview (right) up"),
+            ]),
             Line::from(""),
             Line::from(vec![Span::styled(
                 "Actions:",
@@ -833,7 +1311,7 @@ impl Dashboard {
             Line::from(vec![
                 Span::raw("  "),
                 Span::styled("d", Style::default().fg(Color::Yellow)),
-                Span::raw("      Stop Claude session"),
+                Span::raw("      Delete task/worktree (based on selection)"),
             ]),
             Line::from(vec![
                 Span::raw("  "),
@@ -994,6 +1472,8 @@ enum InputResult {
     Exit,
     Attach(String),
     CreateWorktree(Option<String>, Option<String>), // optional name and optional repo context
+    DeleteWorktree(String),
+    DeleteTask(String),
     Continue,
 }
 

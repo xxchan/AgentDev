@@ -1,8 +1,8 @@
 [package]
-name = "xlaude"
-version = "0.5.0"
+name = "agentdev"
+version = "0.1.0"
 edition = "2024"
-description = "A CLI tool for managing Claude instances with git worktree"
+description = "A CLI tool for managing Agent instances with git worktree"
 license = "Apache-2.0"
 
 [dependencies]
@@ -10,6 +10,7 @@ clap = { version = "4.5.42", features = ["derive", "env"] }
 clap_complete = "4.5.42"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"
+toml = "0.8"
 colored = "3.0.0"
 dialoguer = "0.11.0"
 directories = "6"

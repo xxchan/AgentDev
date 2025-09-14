@@ -16,6 +16,26 @@ pub fn execute_git(args: &[&str]) -> Result<String> {
     }
 }
 
+/// Execute a git command and capture stdout even when exit code is 1.
+///
+/// Rationale: `git diff` family returns exit code 1 when differences are found,
+/// which is not an error for our use cases. Other commands should still use
+/// `execute_git` to get strict error handling.
+fn execute_git_allow_code_1(args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .output()
+        .context("Failed to execute git command")?;
+
+    let code = output.status.code().unwrap_or(-1);
+    if output.status.success() || code == 1 {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Git command failed: {}", stderr);
+    }
+}
+
 pub fn get_repo_name() -> Result<String> {
     // First, try to get the repository name from the remote URL
     // This gives us the true repository name regardless of local directory name
@@ -229,6 +249,95 @@ pub fn update_submodules(worktree_path: &Path) -> Result<()> {
     .context("Failed to update submodules")?;
 
     Ok(())
+}
+
+/// Get a comprehensive git diff for the given worktree path.
+///
+/// Behavior:
+/// - Shows both staged and unstaged changes relative to HEAD when possible
+/// - Falls back to unstaged diff when HEAD doesn't exist (e.g., initial commit)
+/// - Includes untracked files by generating diffs against /dev/null
+pub fn get_diff_for_path(path: &Path) -> Result<String> {
+    let repo = path
+        .to_str()
+        .context("worktree path contains non-UTF8 characters")?;
+
+    // Gather diffs explicitly to ensure unstaged changes are visible.
+    // 1) Unstaged changes (working tree vs index)
+    let unstaged = execute_git_allow_code_1(&[
+        "-C",
+        repo,
+        "-c",
+        "core.quotepath=false",
+        "--no-pager",
+        "diff",
+        "--no-ext-diff",
+    ])
+    .unwrap_or_default();
+    // 2) Staged changes (index vs HEAD)
+    let staged = execute_git_allow_code_1(&[
+        "-C",
+        repo,
+        "-c",
+        "core.quotepath=false",
+        "--no-pager",
+        "diff",
+        "--no-ext-diff",
+        "--cached",
+    ])
+    .unwrap_or_default();
+
+    let mut combined = String::new();
+    if !unstaged.is_empty() {
+        combined.push_str(&unstaged);
+    }
+    if !staged.is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(&staged);
+    }
+
+    // Append diffs for untracked files by diffing /dev/null (or NUL on Windows) against each file.
+    // Use -z to correctly handle filenames with special characters/newlines.
+    if let Ok(untracked_z) = execute_git(&[
+        "-C",
+        repo,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    ]) {
+        if !untracked_z.is_empty() {
+            let dev_null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+            for f in untracked_z.split('\0').filter(|s| !s.is_empty()) {
+                // Skip directories just in case (ls-files should only list files)
+                // Generate a standard git-style unified diff for new files
+                if let Ok(diff_new) = execute_git_allow_code_1(&[
+                    "-C",
+                    repo,
+                    "-c",
+                    "core.quotepath=false",
+                    "--no-pager",
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-index",
+                    "--",
+                    dev_null,
+                    f,
+                ]) {
+                    if !diff_new.is_empty() {
+                        if !combined.is_empty() {
+                            combined.push('\n');
+                        }
+                        combined.push_str(&diff_new);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(combined)
 }
 
 #[cfg(test)]

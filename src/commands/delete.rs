@@ -4,6 +4,7 @@ use colored::Colorize;
 use crate::git::{execute_git, has_unpushed_commits, is_working_tree_clean};
 use crate::input::{get_command_arg, smart_confirm};
 use crate::state::{WorktreeInfo, XlaudeState};
+use crate::tmux::TmuxManager;
 use crate::utils::execute_in_dir;
 
 /// Represents the result of various checks performed before deletion
@@ -56,6 +57,10 @@ pub fn handle_delete(name: Option<String>) -> Result<()> {
         "🔍".yellow(),
         worktree_info.name.cyan()
     );
+
+    // Proactively stop tmux session for this worktree if running
+    let tmux = TmuxManager::new();
+    let _ = tmux.kill_session(&worktree_info.name);
 
     // Handle case where worktree directory doesn't exist
     if !config.worktree_exists {

@@ -18,7 +18,7 @@ fn print_bash_completions() {
     println!(
         r#"#!/bin/bash
 
-_xlaude() {{
+_agentdev() {{
     local cur prev words cword
     if type _init_completion &>/dev/null; then
         _init_completion || return
@@ -32,7 +32,8 @@ _xlaude() {{
     fi
 
     # Main commands
-    local commands="create open delete add rename list clean dir dashboard completions"
+    local commands="worktree dashboard start delete-task completions"
+    local wt_subs="create open delete add rename list clean dir"
 
     # Complete main commands
     if [[ $cword -eq 1 ]]; then
@@ -42,17 +43,38 @@ _xlaude() {{
 
     # Complete subcommand arguments
     case "${{words[1]}}" in
+        worktree)
+            # Complete worktree subcommands
+            if [[ $cword -eq 2 ]]; then
+                COMPREPLY=($(compgen -W "$wt_subs" -- "$cur"))
+                return
+            fi
+            case "${{words[2]}}" in
+                open|dir|delete)
+                    if [[ $cword -eq 3 ]]; then
+                        local worktrees=$(agentdev complete-worktrees 2>/dev/null)
+                        COMPREPLY=($(compgen -W "$worktrees" -- "$cur"))
+                    fi
+                    ;;
+                rename)
+                    if [[ $cword -eq 3 ]]; then
+                        local worktrees=$(agentdev complete-worktrees 2>/dev/null)
+                        COMPREPLY=($(compgen -W "$worktrees" -- "$cur"))
+                    fi
+                    ;;
+            esac
+            ;;
         open|dir|delete)
             if [[ $cword -eq 2 ]]; then
-                # Get worktree names for completion
-                local worktrees=$(xlaude complete-worktrees 2>/dev/null)
+                # Back-compat: top-level alias
+                local worktrees=$(agentdev complete-worktrees 2>/dev/null)
                 COMPREPLY=($(compgen -W "$worktrees" -- "$cur"))
             fi
             ;;
         rename)
             if [[ $cword -eq 2 ]]; then
-                # Complete first argument (old name)
-                local worktrees=$(xlaude complete-worktrees 2>/dev/null)
+                # Back-compat: top-level alias, complete first argument (old name)
+                local worktrees=$(agentdev complete-worktrees 2>/dev/null)
                 COMPREPLY=($(compgen -W "$worktrees" -- "$cur"))
             fi
             ;;
@@ -64,28 +86,23 @@ _xlaude() {{
     esac
 }}
 
-complete -F _xlaude xlaude
+complete -F _agentdev agentdev
 "#
     );
 }
 
 fn print_zsh_completions() {
     println!(
-        r#"#compdef xlaude
+        r#"#compdef agentdev
 
-_xlaude() {{
+_agentdev() {{
     local -a commands
     commands=(
-        'create:Create a new git worktree'
-        'open:Open an existing worktree and launch Claude'
-        'delete:Delete a worktree and clean up'
-        'add:Add current worktree to xlaude management'
-        'rename:Rename a worktree'
-        'list:List all active Claude instances'
-        'clean:Clean up invalid worktrees from state'
-        'dir:Get the directory path of a worktree'
+        'worktree:Worktree management commands'
         'dashboard:Launch interactive dashboard for managing Claude sessions'
         'completions:Generate shell completions'
+        'start:Start a multi-agent task and send a prompt'
+        'delete-task:Delete all resources for a task'
     )
 
     # Main command completion
@@ -96,22 +113,41 @@ _xlaude() {{
 
     # Subcommand argument completion
     case "${{words[2]}}" in
-        open|dir|delete)
+        worktree)
+            local -a wt_subs
+            wt_subs=(
+                'create:Create a new git worktree'
+                'open:Open an existing worktree and launch Claude'
+                'delete:Delete a worktree and clean up'
+                'add:Add current worktree to management'
+                'rename:Rename a worktree'
+                'list:List all active instances'
+                'clean:Clean up invalid worktrees from state'
+                'dir:Get the directory path of a worktree'
+            )
             if (( CURRENT == 3 )); then
-                _xlaude_worktrees
+                _describe 'worktree command' wt_subs
+                return
             fi
-            ;;
-        rename)
-            if (( CURRENT == 3 )); then
-                _xlaude_worktrees
-            elif (( CURRENT == 4 )); then
-                _message "new name"
-            fi
-            ;;
-        create|add)
-            if (( CURRENT == 3 )); then
-                _message "worktree name"
-            fi
+            case "${{words[3]}}" in
+                open|dir|delete)
+                    if (( CURRENT == 4 )); then
+                        __agentdev_worktrees
+                    fi
+                    ;;
+                rename)
+                    if (( CURRENT == 4 )); then
+                        __agentdev_worktrees
+                    elif (( CURRENT == 5 )); then
+                        _message "new name"
+                    fi
+                    ;;
+                create|add)
+                    if (( CURRENT == 4 )); then
+                        _message "worktree name"
+                    fi
+                    ;;
+            esac
             ;;
         completions)
             if (( CURRENT == 3 )); then
@@ -123,13 +159,13 @@ _xlaude() {{
     esac
 }}
 
-_xlaude_worktrees() {{
+__agentdev_worktrees() {{
     local -a worktrees
     local IFS=$'\n'
     
     # Get detailed worktree information (sorted by repo, then by name)
     local worktree_data
-    worktree_data=($(xlaude complete-worktrees --format=detailed 2>/dev/null))
+    worktree_data=($(agentdev complete-worktrees --format=detailed 2>/dev/null))
     
     if [[ -n "$worktree_data" ]]; then
         for line in $worktree_data; do
@@ -150,40 +186,35 @@ _xlaude_worktrees() {{
     else
         # Fallback to simple completion
         local simple_worktrees
-        simple_worktrees=($(xlaude complete-worktrees 2>/dev/null))
+        simple_worktrees=($(agentdev complete-worktrees 2>/dev/null))
         if [[ -n "$simple_worktrees" ]]; then
             compadd -a simple_worktrees
         fi
     fi
 }}
 
-_xlaude "$@"
+_agentdev "$@"
 "#
     );
 }
 
 fn print_fish_completions() {
     println!(
-        r#"# Fish completion for xlaude
+        r#"# Fish completion for agentdev
 
 # Disable file completions by default
-complete -c xlaude -f
+complete -c agentdev -f
 
 # Main commands
-complete -c xlaude -n "__fish_use_subcommand" -a create -d "Create a new git worktree"
-complete -c xlaude -n "__fish_use_subcommand" -a open -d "Open an existing worktree and launch Claude"
-complete -c xlaude -n "__fish_use_subcommand" -a delete -d "Delete a worktree and clean up"
-complete -c xlaude -n "__fish_use_subcommand" -a add -d "Add current worktree to xlaude management"
-complete -c xlaude -n "__fish_use_subcommand" -a rename -d "Rename a worktree"
-complete -c xlaude -n "__fish_use_subcommand" -a list -d "List all active Claude instances"
-complete -c xlaude -n "__fish_use_subcommand" -a clean -d "Clean up invalid worktrees from state"
-complete -c xlaude -n "__fish_use_subcommand" -a dir -d "Get the directory path of a worktree"
-complete -c xlaude -n "__fish_use_subcommand" -a dashboard -d "Launch interactive dashboard for managing Claude sessions"
-complete -c xlaude -n "__fish_use_subcommand" -a completions -d "Generate shell completions"
+complete -c agentdev -n "__fish_use_subcommand" -a worktree -d "Worktree management commands"
+complete -c agentdev -n "__fish_use_subcommand" -a dashboard -d "Launch interactive dashboard"
+complete -c agentdev -n "__fish_use_subcommand" -a start -d "Start a multi-agent task"
+complete -c agentdev -n "__fish_use_subcommand" -a delete-task -d "Delete a task"
+complete -c agentdev -n "__fish_use_subcommand" -a completions -d "Generate shell completions"
 
 # Function to get worktree completions with repo markers
-function __xlaude_worktrees
-    xlaude complete-worktrees --format=detailed 2>/dev/null | while read -l line
+function __agentdev_worktrees
+    agentdev complete-worktrees --format=detailed 2>/dev/null | while read -l line
         # Split tab-separated values: name<TAB>repo<TAB>path<TAB>sessions
         set -l parts (string split \t $line)
         if test (count $parts) -ge 4
@@ -196,16 +227,16 @@ function __xlaude_worktrees
 end
 
 # Simple worktree names (fallback)
-function __xlaude_worktrees_simple
-    xlaude complete-worktrees 2>/dev/null
+function __agentdev_worktrees_simple
+    agentdev complete-worktrees 2>/dev/null
 end
 
 # Worktree completions for commands
-complete -c xlaude -n "__fish_seen_subcommand_from open dir delete" -a "(__xlaude_worktrees)"
-complete -c xlaude -n "__fish_seen_subcommand_from rename" -n "not __fish_seen_argument_from (__xlaude_worktrees_simple)" -a "(__xlaude_worktrees)"
+complete -c agentdev -n "__fish_seen_subcommand_from worktree; and __fish_seen_subcommand_from open dir delete" -a "(__agentdev_worktrees)"
+complete -c agentdev -n "__fish_seen_subcommand_from worktree; and __fish_seen_subcommand_from rename" -n "not __fish_seen_argument_from (__agentdev_worktrees_simple)" -a "(__agentdev_worktrees)"
 
 # Shell completions for completions command
-complete -c xlaude -n "__fish_seen_subcommand_from completions" -a "bash zsh fish"
+complete -c agentdev -n "__fish_seen_subcommand_from completions" -a "bash zsh fish"
 "#
     );
 }

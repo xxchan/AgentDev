@@ -88,7 +88,7 @@ impl TestContext {
     }
 
     fn xlaude(&self, args: &[&str]) -> Command {
-        let mut cmd = Command::cargo_bin("xlaude").unwrap();
+        let mut cmd = Command::cargo_bin("agentdev").unwrap();
         cmd.current_dir(&self.repo_dir)
             .env("HOME", self.temp_dir.path())
             .env("XLAUDE_CONFIG_DIR", &self.config_dir)
@@ -104,7 +104,7 @@ impl TestContext {
     }
 
     fn xlaude_in_dir(&self, dir: &Path, args: &[&str]) -> Command {
-        let mut cmd = Command::cargo_bin("xlaude").unwrap();
+        let mut cmd = Command::cargo_bin("agentdev").unwrap();
         cmd.current_dir(dir)
             .env("HOME", self.temp_dir.path())
             .env("XLAUDE_CONFIG_DIR", &self.config_dir)
@@ -683,7 +683,7 @@ fn test_open_from_non_git_directory() {
     fs::write(config_dir.join("state.json"), state.to_string()).unwrap();
 
     // Try to open from a non-git directory with empty worktrees
-    let mut cmd = Command::cargo_bin("xlaude").unwrap();
+    let mut cmd = Command::cargo_bin("agentdev").unwrap();
     cmd.current_dir(&non_git_dir)
         .env("HOME", temp_dir.path())
         .env("XLAUDE_CONFIG_DIR", &config_dir)

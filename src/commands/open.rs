@@ -79,6 +79,7 @@ pub fn handle_open(name: Option<String>) -> Result<()> {
                         path: current_dir.clone(),
                         repo_name: repo_name.clone(),
                         created_at: Utc::now(),
+                        task_id: None,
                     },
                 );
                 state.save()?;
@@ -116,7 +117,7 @@ pub fn handle_open(name: Option<String>) -> Result<()> {
     }
 
     if state.worktrees.is_empty() {
-        anyhow::bail!("No worktrees found. Create one first with 'xlaude create'");
+        anyhow::bail!("No worktrees found. Create one first with 'agentdev worktree create'");
     }
 
     // Get the name from CLI args or pipe

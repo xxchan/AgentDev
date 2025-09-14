@@ -53,6 +53,7 @@ pub fn handle_add(name: Option<String>) -> Result<()> {
             path: current_dir.clone(),
             repo_name,
             created_at: Utc::now(),
+            task_id: None,
         },
     );
     state.save()?;
