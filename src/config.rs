@@ -47,38 +47,8 @@ pub fn load_agent_config() -> Result<AgentConfig> {
                 .with_context(|| format!("Failed to create config directory: {}", dir.display()))?;
         }
 
-        let default_toml = r#"# agentdev configuration
-
-# Define your agent pool. Left side is the alias you use with --agents, right side is the full command.
-# Notes:
-# - Commands are executed directly by tmux; shell aliases are NOT expanded.
-# - Prefer absolute paths or prefix with `env KEY=VAL ...` to pass environment variables.
-# - If shell features are required, wrap with a shell like: `bash -lic '<cmd>'`.
-# - If a path contains spaces or parentheses, quote it accordingly.
-
-[agents]
-# Simple command
-codex = "codex"
-
-# Claude with explicit binary
-claude = "/usr/local/bin/claude --dangerously-skip-permissions"
-
-# With environment variables via `env` (no shell needed)
-claude_env = "env ANTHROPIC_BASE_URL=https://api.anthropic.com ANTHROPIC_API_KEY=sk-xxx claude --dangerously-skip-permissions"
-
-# With a shell (if you rely on aliases or need to source files)
-# claude_bash = "bash -lic 'source ~/.secrets && claude --dangerously-skip-permissions'"
-
-# Python project via uv (pyproject-based console script)
-# Replace the project path and script name with your own.
-my_py_agent = "uv run --project ~/code/agents/swe-bot swe-bot --mode code"
-
-# Or use a module entry point if no console script is defined
-# my_py_agent_mod = "uv run --project ~/code/agents/swe-bot python -m swe_bot.cli"
-
-# If the path contains spaces or parentheses, quote it:
-# my_py_agent_quoted = "uv run --project \"~/code/Agents (Py)/swe-bot\" swe-bot"
-"#;
+        let default_toml =
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config.example.toml"));
         fs::write(&path, default_toml)
             .with_context(|| format!("Failed to write default config: {}", path.display()))?;
     }

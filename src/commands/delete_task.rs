@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use colored::Colorize;
 
 use crate::input::smart_confirm;
@@ -40,10 +40,10 @@ pub fn handle_delete_task_cli(task_name: Option<String>) -> Result<()> {
 }
 
 pub fn handle_delete_task(task_name: String) -> Result<()> {
-    let mut state = XlaudeState::load()?;
+    let state = XlaudeState::load()?;
 
     // Collect all worktrees for the task
-    let mut targets: Vec<(String, crate::state::WorktreeInfo)> = state
+    let targets: Vec<(String, crate::state::WorktreeInfo)> = state
         .worktrees
         .iter()
         .filter_map(|(k, v)| {

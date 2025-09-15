@@ -17,9 +17,9 @@ use ratatui::{
 use std::io;
 use std::time::{Duration, Instant};
 
-use crate::claude_status::{ClaudeStatus, ClaudeStatusDetector};
+use crate::claude_status::{ClaudeStatus, ClaudeStatusDetector, PanelStatus, to_panel_status};
 use crate::commands::{handle_delete, handle_delete_task};
-use crate::git::get_diff_for_path;
+use crate::git::{execute_git, get_diff_for_path, recent_git_logs, recent_git_logs_for_path};
 use crate::state::XlaudeState;
 use crate::tmux::{SessionInfo, TmuxManager};
 
@@ -36,8 +36,11 @@ pub struct Dashboard {
     create_mode: bool,
     create_input: String,
     create_repo: Option<String>, // Repository context for creating worktree
+    // Follow-up broadcast dialog
+    follow_mode: bool,
+    follow_input: String,
     status_message: Option<String>, // Status message to display
-    status_message_timer: u8,    // Timer to clear status message
+    status_message_timer: u8,       // Timer to clear status message
     status_detector: ClaudeStatusDetector,
     claude_statuses: std::collections::HashMap<String, ClaudeStatus>,
     config_mode: bool,
@@ -60,16 +63,21 @@ pub struct Dashboard {
     dbg_mouse_window_start: Instant,
     // Cache raw diff text per worktree key (styled at render time)
     diff_cache: std::collections::HashMap<String, String>,
+    // Auto-refresh diff: last status check per worktree key
+    diff_last_check: std::collections::HashMap<String, std::time::Instant>,
+    // Auto-refresh diff: last status fingerprint per worktree key
+    diff_status_fingerprint: std::collections::HashMap<String, String>,
     // Throttle live tmux capture per worktree name
     preview_last_capture: std::collections::HashMap<String, std::time::Instant>,
+    // In-dashboard confirmation modal for delete
+    confirm_delete: Option<ConfirmDelete>,
 }
 
 struct WorktreeDisplay {
     name: String,
     repo: String,
     key: String,
-    has_session: bool,
-    claude_status: ClaudeStatus,
+    panel_status: PanelStatus,
     task_id: String,
 }
 
@@ -81,6 +89,44 @@ impl Dashboard {
             return w.name.clone();
         }
         String::new()
+    }
+    // Refresh selected worktree's diff cache if status changed or timer elapsed
+    fn maybe_refresh_diff_for(&mut self, key: &str, path: &std::path::Path) {
+        let now = Instant::now();
+        let should_check = self
+            .diff_last_check
+            .get(key)
+            .map(|t| now.duration_since(*t) >= Duration::from_secs(5))
+            .unwrap_or(true);
+        if !should_check {
+            return;
+        }
+        let repo = match path.to_str() {
+            Some(s) => s,
+            None => return,
+        };
+        if let Ok(status) = execute_git(&[
+            "-C",
+            repo,
+            "-c",
+            "core.quotepath=false",
+            "status",
+            "--porcelain",
+            "-z",
+        ]) {
+            let changed = self
+                .diff_status_fingerprint
+                .get(key)
+                .map(|old| old != &status)
+                .unwrap_or(true);
+            if changed {
+                if let Ok(diff) = get_diff_for_path(path) {
+                    self.diff_cache.insert(key.to_string(), diff);
+                }
+                self.diff_status_fingerprint.insert(key.to_string(), status);
+            }
+        }
+        self.diff_last_check.insert(key.to_string(), now);
     }
     fn style_diff_lines(diff: &str, max_lines: usize) -> Vec<Line<'static>> {
         let mut out = Vec::new();
@@ -142,6 +188,8 @@ impl Dashboard {
             create_mode: false,
             create_input: String::new(),
             create_repo: None,
+            follow_mode: false,
+            follow_input: String::new(),
             status_message: None,
             status_message_timer: 0,
             status_detector: ClaudeStatusDetector::new(),
@@ -161,7 +209,10 @@ impl Dashboard {
             dbg_mouse_scroll_count: 0,
             dbg_mouse_window_start: Instant::now(),
             diff_cache: std::collections::HashMap::new(),
+            diff_last_check: std::collections::HashMap::new(),
+            diff_status_fingerprint: std::collections::HashMap::new(),
             preview_last_capture: std::collections::HashMap::new(),
+            confirm_delete: None,
         };
 
         dashboard.refresh_worktrees();
@@ -225,16 +276,15 @@ impl Dashboard {
                 .iter()
                 .find(|s| s.project == safe_name || s.project == info.name);
 
+            let has_session = session.is_some();
+            let panel_status =
+                to_panel_status(has_session, self.claude_statuses.get(&info.name).cloned());
+
             self.worktrees.push(WorktreeDisplay {
                 name: info.name.clone(),
                 repo: info.repo_name.clone(),
                 key: key.clone(),
-                has_session: session.is_some(),
-                claude_status: self
-                    .claude_statuses
-                    .get(&info.name)
-                    .cloned()
-                    .unwrap_or(ClaudeStatus::NotRunning),
+                panel_status,
                 task_id: info.task_id.clone().unwrap_or_else(|| info.name.clone()),
             });
         }
@@ -363,7 +413,7 @@ impl Dashboard {
                             self.refresh()?;
                         }
                         InputResult::DeleteWorktree(name) => {
-                            // Leave TUI to run deletion safely
+                            // Leave TUI to run deletion safely (we already confirmed inside TUI)
                             disable_raw_mode()?;
                             execute!(
                                 terminal.backend_mut(),
@@ -371,8 +421,27 @@ impl Dashboard {
                                 LeaveAlternateScreen
                             )?;
                             terminal.show_cursor()?;
-
+                            // Ensure downstream delete flows don't prompt again
+                            let old_yes = std::env::var("XLAUDE_YES").ok();
+                            let old_non = std::env::var("XLAUDE_NON_INTERACTIVE").ok();
+                            unsafe {
+                                std::env::set_var("XLAUDE_YES", "1");
+                                std::env::set_var("XLAUDE_NON_INTERACTIVE", "1");
+                            }
                             let res = handle_delete(Some(name.clone()));
+                            // Restore env
+                            unsafe {
+                                if let Some(v) = old_yes {
+                                    std::env::set_var("XLAUDE_YES", v);
+                                } else {
+                                    std::env::remove_var("XLAUDE_YES");
+                                }
+                                if let Some(v) = old_non {
+                                    std::env::set_var("XLAUDE_NON_INTERACTIVE", v);
+                                } else {
+                                    std::env::remove_var("XLAUDE_NON_INTERACTIVE");
+                                }
+                            }
 
                             enable_raw_mode()?;
                             execute!(
@@ -405,7 +474,26 @@ impl Dashboard {
                             )?;
                             terminal.show_cursor()?;
 
+                            // Ensure downstream delete flows don't prompt again
+                            let old_yes = std::env::var("XLAUDE_YES").ok();
+                            let old_non = std::env::var("XLAUDE_NON_INTERACTIVE").ok();
+                            unsafe {
+                                std::env::set_var("XLAUDE_YES", "1");
+                                std::env::set_var("XLAUDE_NON_INTERACTIVE", "1");
+                            }
                             let res = handle_delete_task(task.clone());
+                            unsafe {
+                                if let Some(v) = old_yes {
+                                    std::env::set_var("XLAUDE_YES", v);
+                                } else {
+                                    std::env::remove_var("XLAUDE_YES");
+                                }
+                                if let Some(v) = old_non {
+                                    std::env::set_var("XLAUDE_NON_INTERACTIVE", v);
+                                } else {
+                                    std::env::remove_var("XLAUDE_NON_INTERACTIVE");
+                                }
+                            }
 
                             enable_raw_mode()?;
                             execute!(
@@ -546,6 +634,103 @@ impl Dashboard {
     }
 
     fn handle_input(&mut self, key: KeyEvent) -> Result<InputResult> {
+        // If a confirm modal is open, handle its input exclusively
+        if let Some(ref mut confirm) = self.confirm_delete {
+            match key.code {
+                KeyCode::Esc => {
+                    // Cancel
+                    self.confirm_delete = None;
+                    return Ok(InputResult::Continue);
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    confirm.yes_selected = true;
+                    return Ok(InputResult::Continue);
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    confirm.yes_selected = false;
+                    return Ok(InputResult::Continue);
+                }
+                KeyCode::Char('y' | 'Y') => {
+                    let target = confirm.target.clone();
+                    self.confirm_delete = None;
+                    return Ok(match target {
+                        DeleteTarget::Worktree(n) => InputResult::DeleteWorktree(n),
+                        DeleteTarget::Task(t) => InputResult::DeleteTask(t),
+                    });
+                }
+                KeyCode::Char('n' | 'N') => {
+                    self.confirm_delete = None;
+                    return Ok(InputResult::Continue);
+                }
+                KeyCode::Enter => {
+                    let target = confirm.target.clone();
+                    let yes = confirm.yes_selected;
+                    self.confirm_delete = None;
+                    if yes {
+                        return Ok(match target {
+                            DeleteTarget::Worktree(n) => InputResult::DeleteWorktree(n),
+                            DeleteTarget::Task(t) => InputResult::DeleteTask(t),
+                        });
+                    } else {
+                        return Ok(InputResult::Continue);
+                    }
+                }
+                _ => return Ok(InputResult::Continue),
+            }
+        }
+
+        // Handle follow-up broadcast input
+        if self.follow_mode {
+            match key.code {
+                KeyCode::Esc => {
+                    // Cancel follow-up mode
+                    self.follow_mode = false;
+                    self.follow_input.clear();
+                }
+                KeyCode::Enter => {
+                    // Send follow-up to all running agent sessions
+                    let text = self.follow_input.trim().to_string();
+                    self.follow_mode = false;
+                    self.follow_input.clear();
+
+                    if text.is_empty() {
+                        self.status_message = Some("⚠️ Empty follow-up — cancelled".to_string());
+                        self.status_message_timer = 5;
+                        return Ok(InputResult::Continue);
+                    }
+
+                    // Broadcast: iterate over all known sessions and send text
+                    let mut ok = 0usize;
+                    let total = self.sessions.len();
+                    for sess in &self.sessions {
+                        // Wake the pane and slow-type the text, then Enter
+                        // Use the tmux-safe project name directly
+                        let _ = self.tmux.send_enter(&sess.project);
+                        if slow_type(&self.tmux, &sess.project, &text).is_ok()
+                            && self.tmux.send_enter(&sess.project).is_ok()
+                        {
+                            ok += 1;
+                        }
+                        // small spacing between sessions to avoid input clobbering
+                        std::thread::sleep(std::time::Duration::from_millis(120));
+                    }
+
+                    self.status_message =
+                        Some(format!("✅ Sent follow-up to {ok}/{total} agent(s)"));
+                    self.status_message_timer = 6;
+                }
+                KeyCode::Backspace => {
+                    self.follow_input.pop();
+                }
+                KeyCode::Char(c) => {
+                    // Allow typical text input; basic filtering like create is not needed
+                    self.follow_input.push(c);
+                }
+                _ => {}
+            }
+            return Ok(InputResult::Continue);
+        }
+
         if self.show_help {
             self.show_help = false;
             return Ok(InputResult::Continue);
@@ -634,6 +819,14 @@ impl Dashboard {
                     self.preview_scroll = 0;
                     self.preview_last_capture
                         .remove(&self.current_selected_worktree_name());
+                    // Force diff refresh for the newly selected worktree
+                    if let Some(Some(worktree_idx)) = self.list_index_map.get(self.selected)
+                        && let Some(worktree) = self.worktrees.get(*worktree_idx)
+                    {
+                        self.diff_cache.remove(&worktree.key);
+                        self.diff_last_check.remove(&worktree.key);
+                        self.diff_status_fingerprint.remove(&worktree.key);
+                    }
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -643,6 +836,14 @@ impl Dashboard {
                     self.preview_scroll = 0;
                     self.preview_last_capture
                         .remove(&self.current_selected_worktree_name());
+                    // Force diff refresh for the newly selected worktree
+                    if let Some(Some(worktree_idx)) = self.list_index_map.get(self.selected)
+                        && let Some(worktree) = self.worktrees.get(*worktree_idx)
+                    {
+                        self.diff_cache.remove(&worktree.key);
+                        self.diff_last_check.remove(&worktree.key);
+                        self.diff_status_fingerprint.remove(&worktree.key);
+                    }
                 }
             }
             KeyCode::PageDown | KeyCode::Char('J') => {
@@ -684,14 +885,25 @@ impl Dashboard {
                 }
             }
             KeyCode::Char('d' | 'D') => {
-                // Worktree selected -> delete worktree; Task header selected -> delete task
+                // Worktree selected -> confirm delete worktree; Task header selected -> confirm delete task
                 if let Some(Some(worktree_idx)) = self.list_index_map.get(self.selected)
                     && let Some(worktree) = self.worktrees.get(*worktree_idx)
                 {
-                    return Ok(InputResult::DeleteWorktree(worktree.name.clone()));
+                    self.confirm_delete = Some(ConfirmDelete {
+                        target: DeleteTarget::Worktree(worktree.name.clone()),
+                        yes_selected: false, // default to No
+                    });
                 } else if let Some(task) = self.header_task_map.get(&self.selected) {
-                    return Ok(InputResult::DeleteTask(task.clone()));
+                    self.confirm_delete = Some(ConfirmDelete {
+                        target: DeleteTarget::Task(task.clone()),
+                        yes_selected: false,
+                    });
                 }
+            }
+            KeyCode::Char('f' | 'F') => {
+                // Enter follow-up mode
+                self.follow_mode = true;
+                self.follow_input.clear();
             }
             KeyCode::Char('r' | 'R') => {
                 self.refresh()?;
@@ -810,6 +1022,8 @@ impl Dashboard {
                 Span::raw(" New  "),
                 Span::styled("d", Style::default().fg(Color::Yellow)),
                 Span::raw(" Delete  "),
+                Span::styled("f", Style::default().fg(Color::Yellow)),
+                Span::raw(" Follow-up (all)  "),
                 Span::styled("c", Style::default().fg(Color::Yellow)),
                 Span::raw(" Config  "),
                 Span::styled("r", Style::default().fg(Color::Yellow)),
@@ -866,6 +1080,8 @@ impl Dashboard {
                 Span::raw(" New  "),
                 Span::styled("d", Style::default().fg(Color::Yellow)),
                 Span::raw(" Delete  "),
+                Span::styled("f", Style::default().fg(Color::Yellow)),
+                Span::raw(" Follow-up (all)  "),
                 Span::styled("c", Style::default().fg(Color::Yellow)),
                 Span::raw(" Config  "),
                 Span::styled("r", Style::default().fg(Color::Yellow)),
@@ -923,6 +1139,16 @@ impl Dashboard {
         if self.config_mode {
             self.render_config_dialog(f);
         }
+
+        // Render follow-up dialog if in follow mode
+        if self.follow_mode {
+            self.render_follow_dialog(f);
+        }
+
+        // Render confirm delete dialog if present
+        if self.confirm_delete.is_some() {
+            self.render_confirm_delete_dialog(f);
+        }
     }
 
     fn render_project_list(&mut self, f: &mut Frame, area: Rect) {
@@ -951,14 +1177,8 @@ impl Dashboard {
 
             for worktree_idx in members {
                 let worktree = &self.worktrees[worktree_idx];
-                let (status, status_color) = if !worktree.has_session {
-                    ("◌", Color::DarkGray)
-                } else {
-                    (
-                        worktree.claude_status.display_icon(),
-                        worktree.claude_status.color(),
-                    )
-                };
+                let status = worktree.panel_status.display_icon();
+                let status_color = worktree.panel_status.color();
 
                 // Try to display just agent alias if name is task-alias
                 let display = if let Some(rest) = worktree.name.strip_prefix(&format!("{}-", task))
@@ -1000,9 +1220,18 @@ impl Dashboard {
         // Get the actual worktree from mapping
         let worktree_idx = self.list_index_map.get(self.selected).and_then(|idx| *idx);
 
-        if let Some(idx) = worktree_idx
-            && let Some(worktree) = self.worktrees.get(idx)
-        {
+        if let Some(idx) = worktree_idx {
+            // Auto-refresh diff for selected worktree before borrowing it immutably for render
+            if let Some(key) = self.worktrees.get(idx).map(|w| w.key.clone())
+                && let Some(path) = self.state.worktrees.get(&key).map(|i| i.path.clone())
+            {
+                self.maybe_refresh_diff_for(&key, &path);
+            }
+
+            let worktree = match self.worktrees.get(idx) {
+                Some(w) => w,
+                None => return,
+            };
             // reset debug counters for this frame
             self.dbg_recent_lines = 0;
             self.dbg_diff_lines = 0;
@@ -1025,13 +1254,16 @@ impl Dashboard {
 
             // Add session info (match by safe name)
             let safe_name = worktree.name.replace(['-', '.'], "_");
+            // We collect recent output to render after the diff section
+            let mut pending_preview: Option<String> = None;
             if let Some(session) = self
                 .sessions
                 .iter()
                 .find(|s| s.project == safe_name || s.project == worktree.name)
             {
                 // Try to fetch live pane output for selected background session
-                let mut display_status = worktree.claude_status.clone();
+                let mut display_status: Option<ClaudeStatus> =
+                    self.claude_statuses.get(&worktree.name).cloned();
                 let mut live_preview: Option<String> = None;
                 if !session.is_attached {
                     let now = Instant::now();
@@ -1043,7 +1275,7 @@ impl Dashboard {
                     if should_capture {
                         let cap_start = Instant::now();
                         if let Ok(output) = self.tmux.capture_pane(&worktree.name, 100) {
-                            display_status = self.status_detector.analyze_output(&output);
+                            display_status = Some(self.status_detector.analyze_output(&output));
                             self.preview_cache
                                 .insert(worktree.name.clone(), output.clone());
                             self.preview_last_capture.insert(worktree.name.clone(), now);
@@ -1055,14 +1287,30 @@ impl Dashboard {
                     }
                 }
 
-                // Show both session status and Claude status
+                // Show unified robust status first
+                let panel_status = to_panel_status(true, display_status);
+                lines.push(Line::from(vec![
+                    Span::styled("Status: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        format!(
+                            "{} {}",
+                            panel_status.display_icon(),
+                            panel_status.display_text()
+                        ),
+                        Style::default().fg(panel_status.color()),
+                    ),
+                ]));
+                // Show tmux session name and attach state
+                let full_session_name = self.tmux.session_name(&worktree.name);
                 lines.push(Line::from(vec![
                     Span::styled("Session: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(full_session_name),
+                    Span::raw("  "),
                     Span::styled(
                         if session.is_attached {
-                            "Attached"
+                            "(Attached)"
                         } else {
-                            "Background"
+                            "(Background)"
                         },
                         Style::default().fg(if session.is_attached {
                             Color::Green
@@ -1071,62 +1319,94 @@ impl Dashboard {
                         }),
                     ),
                 ]));
+                // Show session timing info, plus total runtime
+                lines.push(Line::from(vec![
+                    Span::styled("Started: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(SessionInfo::format_time(session.created_at)),
+                    Span::raw("  "),
+                    Span::styled("Last: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(SessionInfo::format_time(session.last_activity)),
+                    Span::raw("  "),
+                    Span::styled("Total: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(SessionInfo::format_duration_since(session.created_at)),
+                ]));
+                // Show worktree path
+                if let Some(info) = self.state.worktrees.get(&worktree.key) {
+                    lines.push(Line::from(vec![
+                        Span::styled("Path: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(info.path.to_string_lossy().to_string()),
+                    ]));
+                    // Show initial prompt if available
+                    if let Some(ref prompt) = info.initial_prompt {
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(Span::styled(
+                            "Initial prompt:",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )));
+                        lines.push(Line::from("─".repeat(area.width as usize - 2)));
+                        for l in prompt.lines() {
+                            lines.push(Line::from(l.to_string()));
+                        }
+                    }
+                }
+                lines.push(Line::from(""));
 
+                // (initial prompt is shown in task header view)
+
+                // (initial prompt for task is shown in header view)
+
+                // Show preview if available (prefer live capture, fallback to cache)
+                if !session.is_attached
+                    && let Some(preview) =
+                        live_preview.or_else(|| self.preview_cache.get(&worktree.name).cloned())
+                {
+                    // We'll render Recent output after Diff to match requested order
+                    pending_preview = Some(preview);
+                }
+            } else {
+                // No tmux session: show Exited status first
+                let panel_status = PanelStatus::Exited;
                 lines.push(Line::from(vec![
                     Span::styled("Status: ", Style::default().add_modifier(Modifier::BOLD)),
                     Span::styled(
                         format!(
                             "{} {}",
-                            display_status.display_icon(),
-                            display_status.display_text()
+                            panel_status.display_icon(),
+                            panel_status.display_text()
                         ),
-                        Style::default().fg(display_status.color()),
+                        Style::default().fg(panel_status.color()),
                     ),
                 ]));
-                lines.push(Line::from(vec![
-                    Span::styled("Created: ", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::raw(SessionInfo::format_time(session.created_at)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "Last activity: ",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(SessionInfo::format_time(session.last_activity)),
-                ]));
-                lines.push(Line::from(""));
-
-                // Show preview if available (prefer live capture, fallback to cache)
-                if !session.is_attached
-                    && let Some(ref preview) =
-                        live_preview.or_else(|| self.preview_cache.get(&worktree.name).cloned())
-                {
-                    lines.push(Line::from(Span::styled(
-                        "Recent output:",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )));
-                    lines.push(Line::from("─".repeat(area.width as usize - 2)));
-
-                    // Show captured output (up to tmux capture limit)
-                    for line in preview.lines() {
-                        self.dbg_recent_lines += 1;
-                        lines.push(Line::from(line.to_string()));
-                    }
-                }
-            } else {
+                // Show would-be tmux session name and path
+                let full_session_name = self.tmux.session_name(&worktree.name);
                 lines.push(Line::from(vec![
                     Span::styled("Session: ", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::styled("Not running", Style::default().fg(Color::DarkGray)),
+                    Span::raw(full_session_name),
+                    Span::raw("  "),
+                    Span::styled("(Not running)", Style::default().fg(Color::DarkGray)),
                 ]));
+                if let Some(info) = self.state.worktrees.get(&worktree.key) {
+                    lines.push(Line::from(vec![
+                        Span::styled("Path: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(info.path.to_string_lossy().to_string()),
+                    ]));
+                    // Show initial prompt if available
+                    if let Some(ref prompt) = info.initial_prompt {
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(Span::styled(
+                            "Initial prompt:",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )));
+                        lines.push(Line::from("─".repeat(area.width as usize - 2)));
+                        for l in prompt.lines() {
+                            lines.push(Line::from(l.to_string()));
+                        }
+                    }
+                }
                 lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "Press Enter to start Claude session",
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                )));
             }
 
+            // Diff section comes immediately after Status
             // Always show git diff for this worktree (colored), regardless of session state
             if let Some(info) = self.state.worktrees.get(&worktree.key) {
                 lines.push(Line::from(""));
@@ -1159,6 +1439,36 @@ impl Dashboard {
                 }
             }
 
+            // Git command logs (debug view)
+            if self.debug_mode {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Git (recent):",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from("─".repeat(area.width as usize - 2)));
+                if let Some(info) = self.state.worktrees.get(&worktree.key) {
+                    for entry in recent_git_logs_for_path(&info.path, 6) {
+                        lines.push(Line::from(entry));
+                    }
+                }
+            }
+
+            // Recent output section comes after Diff
+            if let Some(preview) = pending_preview {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Recent output:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from("─".repeat(area.width as usize - 2)));
+
+                for line in preview.lines() {
+                    self.dbg_recent_lines += 1;
+                    lines.push(Line::from(line.to_string()));
+                }
+            }
+
             // record total lines before moving into Paragraph
             self.dbg_total_lines = lines.len();
 
@@ -1177,6 +1487,29 @@ impl Dashboard {
                     Style::default().add_modifier(Modifier::BOLD),
                 )]));
                 lines.push(Line::from(""));
+                // Show the task's initial prompt if available (from any member)
+                if let Some(prompt) = {
+                    let mut found: Option<String> = None;
+                    for m in self.worktrees.iter().filter(|w| &w.task_id == task) {
+                        if let Some(info) = self.state.worktrees.get(&m.key)
+                            && let Some(ref p) = info.initial_prompt
+                        {
+                            found = Some(p.clone());
+                            break;
+                        }
+                    }
+                    found
+                } {
+                    lines.push(Line::from(Span::styled(
+                        "Initial prompt:",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )));
+                    lines.push(Line::from("─".repeat(area.width as usize - 2)));
+                    for l in prompt.lines() {
+                        lines.push(Line::from(l.to_string()));
+                    }
+                    lines.push(Line::from(""));
+                }
 
                 // Collect members for this task
                 let members: Vec<&WorktreeDisplay> = self
@@ -1252,6 +1585,20 @@ impl Dashboard {
                     )));
                 }
 
+                // Git command logs (debug view)
+                if self.debug_mode {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        "Git (recent):",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )));
+                    lines.push(Line::from("─".repeat(area.width as usize - 2)));
+                    // Aggregated (header) view keeps global logs for now
+                    for entry in recent_git_logs(6) {
+                        lines.push(Line::from(entry));
+                    }
+                }
+
                 let preview = Paragraph::new(lines)
                     .block(Block::default().borders(Borders::ALL).title(" Preview "))
                     .wrap(Wrap { trim: true })
@@ -1312,6 +1659,11 @@ impl Dashboard {
                 Span::raw("  "),
                 Span::styled("d", Style::default().fg(Color::Yellow)),
                 Span::raw("      Delete task/worktree (based on selection)"),
+            ]),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled("f", Style::default().fg(Color::Yellow)),
+                Span::raw("      Send follow-up to ALL agents"),
             ]),
             Line::from(vec![
                 Span::raw("  "),
@@ -1466,6 +1818,140 @@ impl Dashboard {
 
         f.render_widget(dialog, area);
     }
+
+    fn render_confirm_delete_dialog(&self, f: &mut Frame) {
+        let area = centered_rect(60, 30, f.area());
+        let clear = ratatui::widgets::Clear;
+        f.render_widget(clear, area);
+
+        if let Some(ref confirm) = self.confirm_delete {
+            let (title, message) = match &confirm.target {
+                DeleteTarget::Worktree(name) => (
+                    " Confirm Deletion ",
+                    format!("Delete worktree '{}' ?", name),
+                ),
+                DeleteTarget::Task(task) => (
+                    " Confirm Deletion ",
+                    format!("Delete ALL worktrees for task '{}' ?", task),
+                ),
+            };
+
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    message,
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "This action cannot be undone.",
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from(""),
+            ];
+
+            // Buttons row
+            let yes_style = if confirm.yes_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Green)
+            };
+            let no_style = if !confirm.yes_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Red)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Red)
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("[ Yes ]", yes_style),
+                Span::raw("    "),
+                Span::styled("[ No ]", no_style),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Use ←/→ to choose, Enter to confirm, Esc to cancel",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            )));
+
+            let dialog = Paragraph::new(lines)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(title)
+                        .border_style(Style::default().fg(Color::Blue)),
+                )
+                .alignment(Alignment::Center);
+
+            f.render_widget(dialog, area);
+        }
+    }
+
+    fn render_follow_dialog(&self, f: &mut Frame) {
+        let area = centered_rect(70, 30, f.area());
+        let clear = ratatui::widgets::Clear;
+        f.render_widget(clear, area);
+
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "Broadcast follow-up to ALL agents",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("Enter follow-up message:"),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("{}_", self.follow_input),
+                    Style::default().bg(Color::DarkGray).fg(Color::White),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Note: This will type into every running agent session.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Enter", Style::default().fg(Color::Green)),
+                Span::raw(" to send  "),
+                Span::styled("Esc", Style::default().fg(Color::Red)),
+                Span::raw(" to cancel"),
+            ]),
+        ];
+
+        if self.follow_input.is_empty() {
+            lines.insert(
+                5,
+                Line::from(Span::styled(
+                    "(leave empty to cancel)",
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                )),
+            );
+        }
+
+        let dialog = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Follow-up ")
+                    .border_style(Style::default().fg(Color::Blue)),
+            )
+            .alignment(Alignment::Center);
+
+        f.render_widget(dialog, area);
+    }
 }
 
 enum InputResult {
@@ -1475,6 +1961,18 @@ enum InputResult {
     DeleteWorktree(String),
     DeleteTask(String),
     Continue,
+}
+
+#[derive(Clone)]
+enum DeleteTarget {
+    Worktree(String),
+    Task(String),
+}
+
+#[derive(Clone)]
+struct ConfirmDelete {
+    target: DeleteTarget,
+    yes_selected: bool,
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -1510,5 +2008,27 @@ pub fn handle_dashboard() -> Result<()> {
     let mut dashboard = Dashboard::new()?;
     dashboard.run()?;
 
+    Ok(())
+}
+
+/// Slowly type text into a tmux session to reduce input drop issues.
+fn slow_type(tmux: &TmuxManager, project: &str, text: &str) -> Result<()> {
+    let chunk_size: usize = std::env::var("AGENTDEV_SLOW_TYPE_CHUNK")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(80);
+    let delay_ms: u64 = std::env::var("AGENTDEV_SLOW_TYPE_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(40);
+    let mut i = 0;
+    let chars: Vec<char> = text.chars().collect();
+    while i < chars.len() {
+        let end = std::cmp::min(i + chunk_size, chars.len());
+        let chunk: String = chars[i..end].iter().collect();
+        tmux.send_text(project, &chunk)?;
+        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        i = end;
+    }
     Ok(())
 }

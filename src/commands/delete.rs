@@ -176,13 +176,9 @@ fn check_branch_merge_status(
     branch: &str,
 ) -> Result<(bool, bool)> {
     execute_in_dir(main_repo_path, || {
-        // Check traditional git merge
-        let output = std::process::Command::new("git")
-            .args(["branch", "--merged"])
-            .output()
+        // Check traditional git merge (use our git wrapper to capture logs)
+        let merged_branches = execute_git(["branch", "--merged"].as_slice())
             .context("Failed to check merged branches")?;
-
-        let merged_branches = String::from_utf8_lossy(&output.stdout);
         let is_merged_git = merged_branches
             .lines()
             .any(|line| line.trim().trim_start_matches('*').trim() == branch);

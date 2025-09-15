@@ -14,14 +14,14 @@ mod tmux;
 mod utils;
 
 use commands::{
-    handle_add, handle_clean, handle_create, handle_delete, handle_delete_task,
-    handle_delete_task_cli, handle_dir, handle_list, handle_open, handle_rename, handle_start,
+    handle_add, handle_clean, handle_create, handle_delete, handle_delete_task_cli, handle_dir,
+    handle_list, handle_open, handle_rename, handle_start,
 };
 
 #[derive(Parser)]
 #[command(name = "agentdev")]
 #[command(
-    about = "Manage Claude instances with git worktrees",
+    about = "Manage agent instances with git worktrees",
     long_about = None,
     after_help = "\
 Config file:\n\
@@ -185,7 +185,7 @@ enum WorktreeCommands {
         /// New name for the worktree
         new_name: String,
     },
-    /// List all active Claude instances
+    /// List all active instances
     List {
         /// Output as JSON
         #[arg(long)]

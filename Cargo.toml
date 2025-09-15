@@ -22,6 +22,8 @@ ratatui = "0.28"
 crossterm = "0.28"
 atty = "0.2"
 shell-words = "1.1.0"
+unicode-width = "0.1"
+ctrlc = "3.4"
 
 [dev-dependencies]
 insta = { version = "1.41.1", features = ["json", "redactions"] }

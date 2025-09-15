@@ -1,12 +1,198 @@
 use anyhow::{Context, Result};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+
+// Simple in-memory ring buffer for recent git command logs (for dashboard debug view)
+// Keep this lightweight and dependency-free.
+#[derive(Clone, Debug)]
+pub struct GitLogEntry {
+    pub args: Vec<String>,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+const GIT_LOG_CAPACITY: usize = 100;
+// Global chronological buffer (all git calls)
+static GIT_LOGS_GLOBAL: OnceLock<Mutex<VecDeque<GitLogEntry>>> = OnceLock::new();
+// Per-worktree buffers, keyed by repo toplevel path
+static GIT_LOGS_BY_KEY: OnceLock<Mutex<HashMap<String, VecDeque<GitLogEntry>>>> = OnceLock::new();
+
+fn git_logs_global() -> &'static Mutex<VecDeque<GitLogEntry>> {
+    GIT_LOGS_GLOBAL.get_or_init(|| Mutex::new(VecDeque::with_capacity(GIT_LOG_CAPACITY)))
+}
+
+fn git_logs_by_key() -> &'static Mutex<HashMap<String, VecDeque<GitLogEntry>>> {
+    GIT_LOGS_BY_KEY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+// Best-effort derive a worktree key for a git invocation
+// Priority:
+// 1) explicit -C <path> in args
+// 2) current directory's repo toplevel (git rev-parse --show-toplevel)
+fn detect_worktree_key(args: &[&str]) -> Option<String> {
+    // Look for -C <path>
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "-C"
+            && let Some(p) = args.get(i + 1)
+        {
+            return Some(p.to_string());
+        }
+        i += 1;
+    }
+    // Fallback: query repo toplevel quietly (do not record to logs)
+    let out = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if out.status.success() {
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !s.is_empty() {
+            return Some(s);
+        }
+    }
+    None
+}
+
+fn push_git_log(args: &[&str], exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) {
+    // Truncate outputs to avoid excessive memory usage in the ring buffer
+    // Use byte-level truncation before UTF-8 decoding to avoid slicing a
+    // `String` at a non-char boundary (which would panic).
+    const MAX_FIELD_LEN: usize = 2048; // roughly 2KB per field
+
+    fn lossy_truncate_bytes(input: &[u8], max_len: usize) -> String {
+        if input.len() <= max_len {
+            return String::from_utf8_lossy(input).to_string();
+        }
+        let mut s = String::from_utf8_lossy(&input[..max_len]).to_string();
+        s.push_str("\n... [truncated]");
+        s
+    }
+
+    let out = lossy_truncate_bytes(stdout, MAX_FIELD_LEN);
+    let err = lossy_truncate_bytes(stderr, MAX_FIELD_LEN);
+
+    let entry = GitLogEntry {
+        args: args.iter().map(|s| s.to_string()).collect(),
+        exit_code,
+        stdout: out,
+        stderr: err,
+    };
+
+    // Push to global buffer (chronological across worktrees)
+    {
+        let mut buf = git_logs_global().lock().expect("git logs mutex poisoned");
+        if buf.len() >= GIT_LOG_CAPACITY {
+            buf.pop_front();
+        }
+        buf.push_back(entry.clone());
+    }
+
+    // Push to per-worktree buffer if we can detect a key
+    if let Some(key) = detect_worktree_key(args) {
+        let mut map = git_logs_by_key()
+            .lock()
+            .expect("git logs by key mutex poisoned");
+        let buf = map
+            .entry(key)
+            .or_insert_with(|| VecDeque::with_capacity(GIT_LOG_CAPACITY));
+        if buf.len() >= GIT_LOG_CAPACITY {
+            buf.pop_front();
+        }
+        buf.push_back(entry);
+    }
+}
+
+/// Format a slice of entries for display.
+fn format_git_entries(entries: &[GitLogEntry], limit: usize) -> Vec<String> {
+    let count = entries.len();
+    let start = count.saturating_sub(limit);
+    entries
+        .iter()
+        .skip(start)
+        .map(|e| {
+            // Reconstruct a simple display string.
+            let cmd = {
+                let mut parts: Vec<String> = Vec::with_capacity(e.args.len() + 1);
+                parts.push("git".to_string());
+                for a in &e.args {
+                    // Add minimal quoting for whitespace or special parens to aid readability
+                    if a.contains(' ') || a.contains('(') || a.contains(')') {
+                        parts.push(format!("\"{}\"", a));
+                    } else {
+                        parts.push(a.clone());
+                    }
+                }
+                parts.join(" ")
+            };
+            let code = e
+                .exit_code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let stdout_first = e
+                .stdout
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(140)
+                .collect::<String>();
+            let stderr_first = e
+                .stderr
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(140)
+                .collect::<String>();
+            let out_len = e.stdout.len();
+            let err_len = e.stderr.len();
+            if !stderr_first.is_empty() {
+                format!(
+                    "{cmd} => code={code} | stdout {out_len}B: {stdout_first} | stderr {err_len}B: {stderr_first}"
+                )
+            } else if !stdout_first.is_empty() {
+                format!(
+                    "{cmd} => code={code} | stdout {out_len}B: {stdout_first}"
+                )
+            } else {
+                format!("{cmd} => code={code} | (no output)")
+            }
+        })
+        .collect()
+}
+
+/// Get the most recent git command logs (global buffer) formatted for display.
+pub fn recent_git_logs(limit: usize) -> Vec<String> {
+    let buf = git_logs_global().lock().expect("git logs mutex poisoned");
+    let tmp: Vec<GitLogEntry> = buf.iter().cloned().collect();
+    format_git_entries(&tmp, limit)
+}
+
+/// Get the most recent git command logs for a specific worktree path.
+pub fn recent_git_logs_for_path(path: &Path, limit: usize) -> Vec<String> {
+    let key = path.to_string_lossy().to_string();
+    let map = git_logs_by_key()
+        .lock()
+        .expect("git logs by key mutex poisoned");
+    if let Some(buf) = map.get(&key) {
+        let tmp: Vec<GitLogEntry> = buf.iter().cloned().collect();
+        return format_git_entries(&tmp, limit);
+    }
+    Vec::new()
+}
 
 pub fn execute_git(args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .args(args)
         .output()
         .context("Failed to execute git command")?;
+
+    // Record in debug log buffer
+    push_git_log(args, output.status.code(), &output.stdout, &output.stderr);
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -26,6 +212,9 @@ fn execute_git_allow_code_1(args: &[&str]) -> Result<String> {
         .args(args)
         .output()
         .context("Failed to execute git command")?;
+
+    // Record in debug log buffer
+    push_git_log(args, output.status.code(), &output.stdout, &output.stderr);
 
     let code = output.status.code().unwrap_or(-1);
     if output.status.success() || code == 1 {
@@ -307,32 +496,30 @@ pub fn get_diff_for_path(path: &Path) -> Result<String> {
         "--others",
         "--exclude-standard",
         "-z",
-    ]) {
-        if !untracked_z.is_empty() {
-            let dev_null = if cfg!(windows) { "NUL" } else { "/dev/null" };
-            for f in untracked_z.split('\0').filter(|s| !s.is_empty()) {
-                // Skip directories just in case (ls-files should only list files)
-                // Generate a standard git-style unified diff for new files
-                if let Ok(diff_new) = execute_git_allow_code_1(&[
-                    "-C",
-                    repo,
-                    "-c",
-                    "core.quotepath=false",
-                    "--no-pager",
-                    "diff",
-                    "--no-ext-diff",
-                    "--no-index",
-                    "--",
-                    dev_null,
-                    f,
-                ]) {
-                    if !diff_new.is_empty() {
-                        if !combined.is_empty() {
-                            combined.push('\n');
-                        }
-                        combined.push_str(&diff_new);
-                    }
+    ]) && !untracked_z.is_empty()
+    {
+        let dev_null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        for f in untracked_z.split('\0').filter(|s| !s.is_empty()) {
+            // Skip directories just in case (ls-files should only list files)
+            // Generate a standard git-style unified diff for new files
+            if let Ok(diff_new) = execute_git_allow_code_1(&[
+                "-C",
+                repo,
+                "-c",
+                "core.quotepath=false",
+                "--no-pager",
+                "diff",
+                "--no-ext-diff",
+                "--no-index",
+                "--",
+                dev_null,
+                f,
+            ]) && !diff_new.is_empty()
+            {
+                if !combined.is_empty() {
+                    combined.push('\n');
                 }
+                combined.push_str(&diff_new);
             }
         }
     }

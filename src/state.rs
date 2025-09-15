@@ -15,6 +15,8 @@ pub struct WorktreeInfo {
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_prompt: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -24,6 +26,9 @@ pub struct XlaudeState {
     pub editor: Option<String>,
     // Global agent command to launch sessions (full command line string)
     pub agent: Option<String>,
+    // Whether to auto-open dashboard after `agentdev start`
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_open_dashboard_after_start: bool,
 }
 
 impl XlaudeState {
@@ -125,4 +130,8 @@ fn get_config_path() -> Result<PathBuf> {
 /// Returns the full command line string (not split).
 pub fn get_default_agent() -> String {
     "claude --dangerously-skip-permissions".to_string()
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }

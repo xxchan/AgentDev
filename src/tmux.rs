@@ -496,6 +496,11 @@ set -g mouse on"##;
         let safe_project = project.replace(['-', '.'], "_");
         format!("{}_{}", self.session_prefix, safe_project)
     }
+
+    /// Public helper to get the full tmux session name for a project/worktree
+    pub fn session_name(&self, project: &str) -> String {
+        self.make_session_name(project)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -526,6 +531,44 @@ impl SessionInfo {
             format!("{}h ago", diff / 3600)
         } else {
             format!("{}d ago", diff / 86400)
+        }
+    }
+
+    /// Format a human-friendly duration since the given timestamp.
+    /// Examples: "42s", "5m", "2h 14m", "3d 6h"
+    pub fn format_duration_since(timestamp: i64) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let now = std::cmp::min(now, i64::MAX as u64) as i64;
+
+        let secs = now.saturating_sub(timestamp).max(0);
+
+        if secs < 60 {
+            return format!("{}s", secs);
+        }
+
+        let minutes = secs / 60;
+        if minutes < 60 {
+            return format!("{}m", minutes);
+        }
+
+        let hours = minutes / 60;
+        if hours < 24 {
+            let rem_m = minutes % 60;
+            if rem_m == 0 {
+                return format!("{}h", hours);
+            }
+            return format!("{}h {}m", hours, rem_m);
+        }
+
+        let days = hours / 24;
+        let rem_h = hours % 24;
+        if rem_h == 0 {
+            format!("{}d", days)
+        } else {
+            format!("{}d {}h", days, rem_h)
         }
     }
 }

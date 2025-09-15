@@ -54,6 +54,7 @@ pub fn handle_add(name: Option<String>) -> Result<()> {
             repo_name,
             created_at: Utc::now(),
             task_id: None,
+            initial_prompt: None,
         },
     );
     state.save()?;

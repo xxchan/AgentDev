@@ -11,40 +11,59 @@ pub enum ClaudeStatus {
     Error,
     /// No activity detected
     Idle,
-    /// Session not running
-    NotRunning,
 }
 
-impl ClaudeStatus {
+// Note: Display helpers for ClaudeStatus were removed as they were unused.
+
+/// High-level panel status for display: simplified and robust.
+/// Combines tmux session existence with Claude output analysis.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PanelStatus {
+    /// Session exists and is actively processing
+    Running,
+    /// Session exists but waiting/idle
+    Paused,
+    /// No tmux session (process exited or not started)
+    Exited,
+}
+
+impl PanelStatus {
     pub fn display_text(&self) -> &str {
         match self {
-            ClaudeStatus::WaitingForInput => "Waiting",
-            ClaudeStatus::Processing => "Processing",
-            ClaudeStatus::Error => "Error",
-            ClaudeStatus::Idle => "Idle",
-            ClaudeStatus::NotRunning => "Not Running",
+            PanelStatus::Running => "Running",
+            PanelStatus::Paused => "Paused",
+            PanelStatus::Exited => "Exited",
         }
     }
 
     pub fn display_icon(&self) -> &str {
         match self {
-            ClaudeStatus::WaitingForInput => "⏸",
-            ClaudeStatus::Processing => "⚡",
-            ClaudeStatus::Error => "⚠",
-            ClaudeStatus::Idle => "💤",
-            ClaudeStatus::NotRunning => "◌",
+            PanelStatus::Running => "▶",
+            PanelStatus::Paused => "⏸",
+            PanelStatus::Exited => "◌",
         }
     }
 
     pub fn color(&self) -> ratatui::style::Color {
         use ratatui::style::Color;
         match self {
-            ClaudeStatus::WaitingForInput => Color::Yellow,
-            ClaudeStatus::Processing => Color::Green,
-            ClaudeStatus::Error => Color::Red,
-            ClaudeStatus::Idle => Color::DarkGray,
-            ClaudeStatus::NotRunning => Color::DarkGray,
+            PanelStatus::Running => Color::Green,
+            PanelStatus::Paused => Color::Yellow,
+            PanelStatus::Exited => Color::DarkGray,
         }
+    }
+}
+
+/// Convert low-level ClaudeStatus + tmux presence into robust PanelStatus
+pub fn to_panel_status(has_session: bool, claude: Option<ClaudeStatus>) -> PanelStatus {
+    if !has_session {
+        return PanelStatus::Exited;
+    }
+    match claude {
+        Some(ClaudeStatus::Processing) => PanelStatus::Running,
+        Some(ClaudeStatus::Error) => PanelStatus::Running,
+        Some(ClaudeStatus::WaitingForInput) | Some(ClaudeStatus::Idle) => PanelStatus::Paused,
+        None => PanelStatus::Paused,
     }
 }
 
