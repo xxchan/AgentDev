@@ -74,15 +74,14 @@ pub fn resolve_agent_command_with_override(
             .unwrap_or_else(crate::state::get_default_agent)
     };
 
-    // Use shell-style splitting to handle quotes and spaces.
-    let parts = shell_words::split(&cmdline)
-        .map_err(|e| anyhow::anyhow!("Invalid agent command: {} ({e})", cmdline))?;
+    // Get the user's shell
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
-    if parts.is_empty() {
-        anyhow::bail!("Agent command is empty");
-    }
+    // Execute the command through an interactive shell to support aliases
+    // -i: interactive (loads aliases)
+    // -c: execute command
+    let program = shell;
+    let args = vec!["-i".to_string(), "-c".to_string(), cmdline];
 
-    let program = parts[0].clone();
-    let args = parts[1..].to_vec();
     Ok((program, args))
 }
