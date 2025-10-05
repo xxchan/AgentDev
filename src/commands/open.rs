@@ -6,10 +6,10 @@ use std::process::{Command, Stdio};
 use crate::git::{get_current_branch, get_repo_name, is_base_branch, is_in_worktree};
 use crate::input::{drain_stdin, get_command_arg, is_piped_input, smart_confirm, smart_select};
 use crate::state::{WorktreeInfo, XlaudeState};
-use crate::utils::resolve_agent_command;
+use crate::utils::resolve_agent_command_with_override;
 use crate::utils::sanitize_branch_name;
 
-pub fn handle_open(name: Option<String>) -> Result<()> {
+pub fn handle_open(name: Option<String>, agent: Option<String>) -> Result<()> {
     let mut state = XlaudeState::load()?;
 
     // Check if current path is a worktree when no name is provided
@@ -95,7 +95,7 @@ pub fn handle_open(name: Option<String>) -> Result<()> {
             }
 
             // Launch agent in current directory
-            let (program, args) = resolve_agent_command()?;
+            let (program, args) = resolve_agent_command_with_override(agent.clone())?;
             let mut cmd = Command::new(&program);
             cmd.args(&args);
 
@@ -165,8 +165,8 @@ pub fn handle_open(name: Option<String>) -> Result<()> {
     // Change to worktree directory and launch Claude
     std::env::set_current_dir(&worktree_info.path).context("Failed to change directory")?;
 
-    // Resolve global agent command
-    let (program, args) = resolve_agent_command()?;
+    // Resolve global agent command with optional override
+    let (program, args) = resolve_agent_command_with_override(agent)?;
     let mut cmd = Command::new(&program);
     cmd.args(&args);
 

@@ -544,7 +544,7 @@ impl Dashboard {
                             // Create the worktree quietly in background
                             let created_name =
                                 match crate::commands::create::handle_create_in_dir_quiet(
-                                    name, repo_path, true,
+                                    name, repo_path, true, None,
                                 ) {
                                     Ok(name) => name,
                                     Err(e) => {

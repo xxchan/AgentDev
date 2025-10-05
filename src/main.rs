@@ -38,7 +38,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Worktree management commands
-    #[command(alias = "wt")]
+    #[command(alias = "wt", alias = "x")]
     Worktree {
         #[command(subcommand)]
         cmd: WorktreeCommands,
@@ -48,11 +48,17 @@ enum Commands {
     Create {
         /// Name for the worktree (random BIP39 word if not provided)
         name: Option<String>,
+        /// Agent command to use (overrides global config)
+        #[arg(long)]
+        agent: Option<String>,
     },
     #[command(hide = true)]
     Open {
         /// Name of the worktree to open (interactive selection if not provided)
         name: Option<String>,
+        /// Agent command to use (overrides global config)
+        #[arg(long)]
+        agent: Option<String>,
     },
     #[command(hide = true)]
     Delete {
@@ -126,8 +132,8 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Worktree { cmd } => match cmd {
-            WorktreeCommands::Create { name } => handle_create(name),
-            WorktreeCommands::Open { name } => handle_open(name),
+            WorktreeCommands::Create { name, agent } => handle_create(name, agent),
+            WorktreeCommands::Open { name, agent } => handle_open(name, agent),
             WorktreeCommands::Delete { name } => handle_delete(name),
             WorktreeCommands::Add { name } => handle_add(name),
             WorktreeCommands::Rename { old_name, new_name } => handle_rename(old_name, new_name),
@@ -145,8 +151,8 @@ fn main() -> Result<()> {
         } => handle_start(prompt, agents, name),
         Commands::DeleteTask { task_name } => handle_delete_task_cli(task_name),
         // Backward-compatible routing
-        Commands::Create { name } => handle_create(name),
-        Commands::Open { name } => handle_open(name),
+        Commands::Create { name, agent } => handle_create(name, agent),
+        Commands::Open { name, agent } => handle_open(name, agent),
         Commands::Delete { name } => handle_delete(name),
         Commands::Add { name } => handle_add(name),
         Commands::Rename { old_name, new_name } => handle_rename(old_name, new_name),
@@ -162,11 +168,17 @@ enum WorktreeCommands {
     Create {
         /// Name for the worktree (random BIP39 word if not provided)
         name: Option<String>,
+        /// Agent command to use (overrides global config)
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// Open an existing worktree and launch Claude
     Open {
         /// Name of the worktree to open (interactive selection if not provided)
         name: Option<String>,
+        /// Agent command to use (overrides global config)
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// Delete a worktree and clean up
     Delete {

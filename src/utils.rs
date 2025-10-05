@@ -57,11 +57,22 @@ where
 
 /// Resolve agent command from state or default, and split into program + args.
 pub fn resolve_agent_command() -> Result<(String, Vec<String>)> {
-    let state = crate::state::XlaudeState::load()?;
-    let cmdline = state
-        .agent
-        .clone()
-        .unwrap_or_else(crate::state::get_default_agent);
+    resolve_agent_command_with_override(None)
+}
+
+/// Resolve agent command with optional override, and split into program + args.
+pub fn resolve_agent_command_with_override(
+    override_cmd: Option<String>,
+) -> Result<(String, Vec<String>)> {
+    let cmdline = if let Some(cmd) = override_cmd {
+        cmd
+    } else {
+        let state = crate::state::XlaudeState::load()?;
+        state
+            .agent
+            .clone()
+            .unwrap_or_else(crate::state::get_default_agent)
+    };
 
     // Use shell-style splitting to handle quotes and spaces.
     let parts = shell_words::split(&cmdline)

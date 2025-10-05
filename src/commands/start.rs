@@ -190,7 +190,7 @@ Install tmux and retry. On macOS: `brew install tmux`. On Ubuntu: `sudo apt-get 
         let branch = sanitize_branch_name(&branch);
         println!("  {} [1/{}] Create worktree", "→".blue(), steps_total);
         let created_name =
-            crate::commands::create::handle_create_in_dir_quiet(Some(branch.clone()), None, true)?;
+            crate::commands::create::handle_create_in_dir_quiet(Some(branch.clone()), None, true, None)?;
         println!(
             "    {} name: {}",
             "✓".green(),
