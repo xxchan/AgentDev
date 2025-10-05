@@ -14,6 +14,12 @@ pub struct GitLogEntry {
     pub stderr: String,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct AheadBehind {
+    pub ahead: u32,
+    pub behind: u32,
+}
+
 const GIT_LOG_CAPACITY: usize = 100;
 // Global chronological buffer (all git calls)
 static GIT_LOGS_GLOBAL: OnceLock<Mutex<VecDeque<GitLogEntry>>> = OnceLock::new();
@@ -200,6 +206,25 @@ pub fn execute_git(args: &[&str]) -> Result<String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("Git command failed: {}", stderr);
     }
+}
+
+pub fn ahead_behind(local_ref: &str, upstream_ref: &str) -> Result<AheadBehind> {
+    let spec = format!("{upstream_ref}...{local_ref}");
+    let output = execute_git(&["rev-list", "--left-right", "--count", &spec])?;
+    let mut parts = output.split_whitespace();
+    let behind_str = parts
+        .next()
+        .context("Missing behind count from git rev-list output")?;
+    let ahead_str = parts
+        .next()
+        .context("Missing ahead count from git rev-list output")?;
+    let behind = behind_str
+        .parse::<u32>()
+        .with_context(|| format!("Failed to parse behind count from `{behind_str}`"))?;
+    let ahead = ahead_str
+        .parse::<u32>()
+        .with_context(|| format!("Failed to parse ahead count from `{ahead_str}`"))?;
+    Ok(AheadBehind { ahead, behind })
 }
 
 /// Execute a git command and capture stdout even when exit code is 1.

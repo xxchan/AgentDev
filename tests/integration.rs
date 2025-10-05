@@ -963,3 +963,138 @@ fn test_delete_with_slash_in_branch_name() {
     let key = "test-repo/feature-awesome".to_string();
     assert!(!state["worktrees"].as_object().unwrap().contains_key(&key));
 }
+
+#[test]
+fn test_worktree_merge_with_squash_flag() {
+    let ctx = TestContext::new("test-repo");
+
+    let output = std::process::Command::new("git")
+        .args(["branch", "-M", "main"])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "failed to rename branch: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let remote_dir = ctx.temp_dir.path().join("test-repo.git");
+    let output = std::process::Command::new("git")
+        .arg("init")
+        .arg("--bare")
+        .arg(&remote_dir)
+        .current_dir(ctx.temp_dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "failed to init remote: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = std::process::Command::new("git")
+        .arg("remote")
+        .arg("add")
+        .arg("origin")
+        .arg(&remote_dir)
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "failed to add remote: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = std::process::Command::new("git")
+        .args(["push", "-u", "origin", "main"])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "failed to push main: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = std::process::Command::new("git")
+        .args(["remote", "set-head", "origin", "main"])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "failed to set origin head: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    ctx.xlaude(&["worktree", "create", "feature-merge"])
+        .assert()
+        .success();
+
+    let state = ctx.read_state();
+    let worktrees = state["worktrees"]
+        .as_object()
+        .expect("worktrees should be object");
+    let worktree_entry = worktrees
+        .values()
+        .find(|entry| entry["name"] == "feature-merge")
+        .expect("feature worktree recorded");
+    let worktree_path = PathBuf::from(
+        worktree_entry["path"]
+            .as_str()
+            .expect("worktree path should be a string"),
+    );
+    assert!(worktree_path.exists());
+
+    fs::write(worktree_path.join("feature.txt"), "feature squash content").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "feature.txt"])
+        .current_dir(&worktree_path)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args([
+            "commit",
+            "--no-gpg-sign",
+            "-m",
+            "Add feature content for squash",
+        ])
+        .current_dir(&worktree_path)
+        .output()
+        .unwrap();
+
+    let merge_output = ctx
+        .xlaude(&["worktree", "merge", "feature-merge", "--squash"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&merge_output.get_output().stdout);
+    assert!(stdout.contains("Created squash commit"), "{stdout}");
+    assert!(
+        stdout.contains("Squash merge feature-merge into main"),
+        "{stdout}"
+    );
+
+    let log_output = std::process::Command::new("git")
+        .args(["log", "-1", "--pretty=%s"])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&log_output.stdout).trim(),
+        "Squash merge feature-merge into main"
+    );
+
+    let status_output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&status_output.stdout)
+            .trim()
+            .is_empty()
+    );
+}

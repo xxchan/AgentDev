@@ -14,8 +14,8 @@ mod tmux;
 mod utils;
 
 use commands::{
-    handle_add, handle_clean, handle_create, handle_delete, handle_delete_task_cli, handle_dir,
-    handle_list, handle_open, handle_rename, handle_start,
+    MergeStrategy, handle_add, handle_clean, handle_create, handle_delete, handle_delete_task_cli,
+    handle_dir, handle_list, handle_merge, handle_open, handle_rename, handle_start,
 };
 
 #[derive(Parser)]
@@ -140,6 +140,13 @@ fn main() -> Result<()> {
             WorktreeCommands::List { json } => handle_list(json),
             WorktreeCommands::Clean => handle_clean(),
             WorktreeCommands::Dir { name } => handle_dir(name),
+            WorktreeCommands::Merge {
+                name,
+                push,
+                cleanup,
+                strategy,
+                squash,
+            } => handle_merge(name, push, cleanup, strategy, squash),
         },
         Commands::Completions { shell } => completions::handle_completions(shell),
         Commands::CompleteWorktrees { format } => commands::handle_complete_worktrees(&format),
@@ -209,5 +216,22 @@ enum WorktreeCommands {
     Dir {
         /// Name of the worktree (interactive selection if not provided)
         name: Option<String>,
+    },
+    /// Merge a worktree branch into the default branch
+    Merge {
+        /// Name of the worktree to merge (current if not provided)
+        name: Option<String>,
+        /// Push the default branch after a successful merge
+        #[arg(long)]
+        push: bool,
+        /// Delete the worktree after a successful merge
+        #[arg(long)]
+        cleanup: bool,
+        /// Merge strategy (defaults to ff-only unless --squash)
+        #[arg(long, value_enum)]
+        strategy: Option<MergeStrategy>,
+        /// Shortcut for --strategy squash
+        #[arg(long)]
+        squash: bool,
     },
 }

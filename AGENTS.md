@@ -42,6 +42,15 @@
 - 需要时进行二次确认
 - 自动删除 worktree 和本地分支（如果安全）
 
+### agentdev worktree merge [name]
+在主仓中合并 worktree 分支：
+- 默认在主仓尝试把 worktree 分支 fast-forward 合并到默认分支（检测并切换 `origin/HEAD` 指向的分支，常见为 `main`）。
+- 运行前会确认 worktree 和主仓都保持干净工作区，避免把未提交改动带入合并。
+- 先 `git fetch origin`，随后 `pull --ff-only` 刷新默认分支，再执行 `git merge --ff-only <branch>`；若需要普通 merge commit，可加 `--strategy merge`。
+- `--push` 参数会在成功后立即 `git push origin <default_branch>`。
+- `--cleanup` 会在合并成功后调用 `agentdev worktree delete` 帮你收尾（仍遵守删除命令的安全检查）。
+- `--strategy` 支持 `ff-only`（默认）、`merge` 和 `squash`。`--squash` 则是 `--strategy squash` 的快捷方式，会执行 `git merge --squash` 并以 `Squash merge <branch> into <default>` 为提交信息自动提交。
+
 ### xlaude add [name]
 将当前 worktree 添加到 xlaude 管理：
 - 必须在 git worktree 中执行
@@ -142,6 +151,9 @@ xlaude create my-feature  # 创建 worktree
 xlaude open my-feature   # 打开并开始工作
 # ... 工作完成后 ...
 xlaude delete my-feature # 清理 worktree
+
+# 工作完成后的合并
+agentdev worktree merge my-feature --push --cleanup
 
 # 直接在当前 worktree 中启动
 cd ../opendal-feature
