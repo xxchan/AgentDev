@@ -132,10 +132,22 @@ impl TestContext {
     }
 
     fn worktree_exists(&self, name: &str) -> bool {
-        self.temp_dir
-            .path()
-            .join(format!("test-repo-{name}"))
-            .exists()
+        self.worktree_path(name).exists()
+    }
+
+    fn worktree_path(&self, name: &str) -> PathBuf {
+        let repo_name = self
+            .repo_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("repo directory missing name");
+        self.temp_dir.path().join(format!("{repo_name}-{name}"))
+    }
+
+    fn canonical_worktree_path(&self, name: &str) -> PathBuf {
+        self.worktree_path(name)
+            .canonicalize()
+            .unwrap_or_else(|_| self.worktree_path(name))
     }
 
     fn redact_paths(&self, text: &str) -> String {
@@ -152,6 +164,75 @@ impl TestContext {
         result = re.replace_all(&result, "[TIMESTAMP]").to_string();
 
         result
+    }
+
+    fn setup_remote_with_main(&self) {
+        let repo_name = self
+            .repo_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("repo directory missing name");
+
+        let rename_output = std::process::Command::new("git")
+            .args(["branch", "-M", "main"])
+            .current_dir(&self.repo_dir)
+            .output()
+            .unwrap();
+        assert!(
+            rename_output.status.success(),
+            "failed to rename branch: {}",
+            String::from_utf8_lossy(&rename_output.stderr)
+        );
+
+        let remote_dir = self.temp_dir.path().join(format!("{repo_name}.git"));
+        let init_remote = std::process::Command::new("git")
+            .arg("init")
+            .arg("--bare")
+            .arg(&remote_dir)
+            .current_dir(self.temp_dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            init_remote.status.success(),
+            "failed to init remote: {}",
+            String::from_utf8_lossy(&init_remote.stderr)
+        );
+
+        let add_remote = std::process::Command::new("git")
+            .arg("remote")
+            .arg("add")
+            .arg("origin")
+            .arg(&remote_dir)
+            .current_dir(&self.repo_dir)
+            .output()
+            .unwrap();
+        assert!(
+            add_remote.status.success(),
+            "failed to add remote: {}",
+            String::from_utf8_lossy(&add_remote.stderr)
+        );
+
+        let push_main = std::process::Command::new("git")
+            .args(["push", "-u", "origin", "main"])
+            .current_dir(&self.repo_dir)
+            .output()
+            .unwrap();
+        assert!(
+            push_main.status.success(),
+            "failed to push main: {}",
+            String::from_utf8_lossy(&push_main.stderr)
+        );
+
+        let set_head = std::process::Command::new("git")
+            .args(["remote", "set-head", "origin", "main"])
+            .current_dir(&self.repo_dir)
+            .output()
+            .unwrap();
+        assert!(
+            set_head.status.success(),
+            "failed to set origin head: {}",
+            String::from_utf8_lossy(&set_head.stderr)
+        );
     }
 }
 
@@ -205,6 +286,90 @@ fn test_create_random_name() {
     // Verify a worktree was created (name will vary based on random selection)
     assert!(stdout.contains("Creating worktree"));
     assert!(stdout.contains("Worktree created at"));
+}
+
+#[test]
+fn test_exec_runs_command_in_named_worktree() {
+    let ctx = TestContext::new("test-repo");
+
+    ctx.xlaude(&["worktree", "create", "feature-x"])
+        .assert()
+        .success();
+
+    let expected_path = ctx.canonical_worktree_path("feature-x");
+    let output = ctx
+        .xlaude(&[
+            "worktree",
+            "exec",
+            "feature-x",
+            "git",
+            "rev-parse",
+            "--show-toplevel",
+        ])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let last_line = stdout.lines().last().unwrap_or("");
+    assert_eq!(
+        last_line,
+        expected_path.to_string_lossy(),
+        "command should run inside the selected worktree"
+    );
+}
+
+#[test]
+fn test_exec_runs_command_in_current_worktree() {
+    let ctx = TestContext::new("test-repo");
+
+    ctx.xlaude(&["worktree", "create", "feature-x"])
+        .assert()
+        .success();
+
+    let worktree_dir = ctx.canonical_worktree_path("feature-x");
+    let output = ctx
+        .xlaude_in_dir(
+            &worktree_dir,
+            &["worktree", "exec", "git", "rev-parse", "--show-toplevel"],
+        )
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let last_line = stdout.lines().last().unwrap_or("");
+    assert_eq!(
+        last_line,
+        worktree_dir.to_string_lossy(),
+        "command should inherit current worktree when no name provided"
+    );
+}
+
+#[test]
+fn test_exec_parses_single_argument_command() {
+    let ctx = TestContext::new("test-repo");
+
+    ctx.xlaude(&["worktree", "create", "feature-x"])
+        .assert()
+        .success();
+
+    let expected_path = ctx.canonical_worktree_path("feature-x");
+    let output = ctx
+        .xlaude(&[
+            "worktree",
+            "exec",
+            "feature-x",
+            "git rev-parse --show-toplevel",
+        ])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let last_line = stdout.lines().last().unwrap_or("");
+    assert_eq!(
+        last_line,
+        expected_path.to_string_lossy(),
+        "command should support quoted invocation"
+    );
 }
 
 #[test]
@@ -968,66 +1133,7 @@ fn test_delete_with_slash_in_branch_name() {
 fn test_worktree_merge_with_squash_flag() {
     let ctx = TestContext::new("test-repo");
 
-    let output = std::process::Command::new("git")
-        .args(["branch", "-M", "main"])
-        .current_dir(&ctx.repo_dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "failed to rename branch: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let remote_dir = ctx.temp_dir.path().join("test-repo.git");
-    let output = std::process::Command::new("git")
-        .arg("init")
-        .arg("--bare")
-        .arg(&remote_dir)
-        .current_dir(ctx.temp_dir.path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "failed to init remote: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let output = std::process::Command::new("git")
-        .arg("remote")
-        .arg("add")
-        .arg("origin")
-        .arg(&remote_dir)
-        .current_dir(&ctx.repo_dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "failed to add remote: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let output = std::process::Command::new("git")
-        .args(["push", "-u", "origin", "main"])
-        .current_dir(&ctx.repo_dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "failed to push main: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let output = std::process::Command::new("git")
-        .args(["remote", "set-head", "origin", "main"])
-        .current_dir(&ctx.repo_dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "failed to set origin head: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    ctx.setup_remote_with_main();
 
     ctx.xlaude(&["worktree", "create", "feature-merge"])
         .assert()
@@ -1077,14 +1183,97 @@ fn test_worktree_merge_with_squash_flag() {
         "{stdout}"
     );
 
-    let log_output = std::process::Command::new("git")
+    let subject_output = std::process::Command::new("git")
         .args(["log", "-1", "--pretty=%s"])
         .current_dir(&ctx.repo_dir)
         .output()
         .unwrap();
     assert_eq!(
-        String::from_utf8_lossy(&log_output.stdout).trim(),
+        String::from_utf8_lossy(&subject_output.stdout).trim(),
+        "Add feature content for squash"
+    );
+
+    let body_output = std::process::Command::new("git")
+        .args(["log", "-1", "--pretty=%b"])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&body_output.stdout).trim(),
         "Squash merge feature-merge into main"
+    );
+
+    let status_output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&status_output.stdout)
+            .trim()
+            .is_empty()
+    );
+}
+
+#[test]
+fn test_worktree_merge_prompts_for_repo_worktree() {
+    let ctx = TestContext::new("test-repo");
+
+    ctx.setup_remote_with_main();
+
+    ctx.xlaude(&["worktree", "create", "feature-alpha"])
+        .assert()
+        .success();
+    ctx.xlaude(&["worktree", "create", "feature-beta"])
+        .assert()
+        .success();
+
+    let alpha_path = ctx.canonical_worktree_path("feature-alpha");
+    assert!(alpha_path.exists());
+
+    fs::write(alpha_path.join("alpha.txt"), "alpha squash content").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "alpha.txt"])
+        .current_dir(&alpha_path)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "--no-gpg-sign", "-m", "Add alpha squash content"])
+        .current_dir(&alpha_path)
+        .output()
+        .unwrap();
+
+    let merge_output = ctx
+        .xlaude(&["worktree", "merge", "--squash"])
+        .write_stdin("0\n")
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&merge_output.get_output().stdout);
+    assert!(stdout.contains("feature-alpha"), "{stdout}");
+    assert!(
+        stdout.contains("Squash merge feature-alpha into main"),
+        "{stdout}"
+    );
+
+    let subject_output = std::process::Command::new("git")
+        .args(["log", "-1", "--pretty=%s"])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&subject_output.stdout).trim(),
+        "Add alpha squash content"
+    );
+
+    let body_output = std::process::Command::new("git")
+        .args(["log", "-1", "--pretty=%b"])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&body_output.stdout).trim(),
+        "Squash merge feature-alpha into main"
     );
 
     let status_output = std::process::Command::new("git")

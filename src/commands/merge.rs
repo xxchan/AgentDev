@@ -8,7 +8,7 @@ use super::delete::handle_delete;
 use crate::git::{
     ahead_behind, execute_git, get_current_branch, get_default_branch, is_working_tree_clean,
 };
-use crate::input::{get_command_arg, smart_confirm};
+use crate::input::{get_command_arg, smart_confirm, smart_select};
 use crate::state::{WorktreeInfo, XlaudeState};
 use crate::utils::execute_in_dir;
 
@@ -85,8 +85,13 @@ pub fn handle_merge(
         default_branch.cyan()
     );
 
-    if let Some(message) = outcome.squash_commit_message {
-        println!("  {} Created squash commit: {}", "ℹ️".blue(), message);
+    if let Some(subject) = outcome.squash_commit_subject {
+        println!("  {} Created squash commit: {}", "ℹ️".blue(), subject);
+        if let Some(detail) = outcome.squash_detail {
+            if detail != subject {
+                println!("    {}", detail);
+            }
+        }
     }
 
     if !push {
@@ -116,31 +121,165 @@ pub fn handle_merge(
 }
 
 fn resolve_worktree(state: &XlaudeState, target_name: Option<String>) -> Result<WorktreeInfo> {
+    let current_dir = std::env::current_dir()?;
+
     if let Some(name) = target_name {
-        state
+        if let Some(info) = state
             .worktrees
             .values()
             .find(|info| info.name == name)
             .cloned()
-            .with_context(|| format!("Worktree '{}' not found", name))
-    } else {
-        resolve_current_worktree(state)
+        {
+            return Ok(info);
+        }
+
+        if let Some(info) = resolve_selection_from_input(state, &current_dir, &name)? {
+            return Ok(info);
+        }
+
+        bail!("Worktree '{}' not found", name);
+    }
+
+    if let Some(info) = find_worktree_for_dir(state, &current_dir)? {
+        return Ok(info);
+    }
+
+    match select_worktree_for_repo(state, &current_dir)? {
+        WorktreeSelection::Selected(info) => Ok(info),
+        WorktreeSelection::NoWorktrees => {
+            bail!(
+                "No managed worktrees found for the current repository. Provide a worktree name or create one before merging."
+            );
+        }
+        WorktreeSelection::Cancelled => {
+            bail!(
+                "No worktree selected. Provide a worktree name or run the command from a worktree directory."
+            );
+        }
     }
 }
 
-fn resolve_current_worktree(state: &XlaudeState) -> Result<WorktreeInfo> {
-    let current_dir = std::env::current_dir()?;
-    let dir_name = current_dir
+fn find_worktree_for_dir(state: &XlaudeState, current_dir: &Path) -> Result<Option<WorktreeInfo>> {
+    let dir_name = match current_dir.file_name().and_then(|n| n.to_str()) {
+        Some(name) => name,
+        None => return Ok(None),
+    };
+
+    let dir_canon = current_dir
+        .canonicalize()
+        .unwrap_or_else(|_| current_dir.to_path_buf());
+
+    let worktree = state.worktrees.values().find_map(|info| {
+        let Some(info_name) = info.path.file_name().and_then(|n| n.to_str()) else {
+            return None;
+        };
+        if info_name != dir_name {
+            return None;
+        }
+
+        let info_canon = info
+            .path
+            .canonicalize()
+            .unwrap_or_else(|_| info.path.clone());
+        if info_canon == dir_canon {
+            Some(info.clone())
+        } else {
+            None
+        }
+    });
+
+    Ok(worktree)
+}
+
+fn select_worktree_for_repo(state: &XlaudeState, current_dir: &Path) -> Result<WorktreeSelection> {
+    let (repo_name, mut candidates) = worktrees_for_repo(state, current_dir)?;
+
+    if candidates.is_empty() {
+        return Ok(WorktreeSelection::NoWorktrees);
+    }
+
+    if candidates.len() == 1 {
+        return Ok(WorktreeSelection::Selected(candidates.remove(0)));
+    }
+
+    let repo_display = repo_name.unwrap_or_else(|| current_dir.display().to_string());
+    let prompt = format!("Select worktree to merge for repo '{}'", repo_display);
+    match smart_select(&prompt, &candidates, |info| {
+        format!("{} [{}]", info.name, info.branch)
+    })? {
+        Some(index) => Ok(WorktreeSelection::Selected(
+            candidates
+                .get(index)
+                .cloned()
+                .expect("selection index must be valid"),
+        )),
+        None => Ok(WorktreeSelection::Cancelled),
+    }
+}
+
+fn resolve_selection_from_input(
+    state: &XlaudeState,
+    current_dir: &Path,
+    raw_input: &str,
+) -> Result<Option<WorktreeInfo>> {
+    let (_, candidates) = worktrees_for_repo(state, current_dir)?;
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let input = raw_input.trim();
+
+    if let Ok(index) = input.parse::<usize>() {
+        return Ok(candidates.get(index).cloned());
+    }
+
+    for info in &candidates {
+        let display = format!("{} [{}]", info.name, info.branch);
+        if display == input {
+            return Ok(Some(info.clone()));
+        }
+    }
+
+    Ok(None)
+}
+
+fn worktrees_for_repo(
+    state: &XlaudeState,
+    current_dir: &Path,
+) -> Result<(Option<String>, Vec<WorktreeInfo>)> {
+    let repo_name = current_dir
         .file_name()
         .and_then(|n| n.to_str())
-        .context("Failed to get current directory name")?;
+        .map(|s| s.to_string());
 
-    state
+    let repo_canon = current_dir
+        .canonicalize()
+        .unwrap_or_else(|_| current_dir.to_path_buf());
+
+    let mut candidates: Vec<WorktreeInfo> = state
         .worktrees
         .values()
-        .find(|info| info.path.file_name().and_then(|n| n.to_str()) == Some(dir_name))
-        .cloned()
-        .context("Current directory is not a managed worktree")
+        .filter_map(|info| {
+            let parent = info.path.parent()?;
+            let repo_path = parent.join(&info.repo_name);
+            let repo_path_canon = repo_path.canonicalize().unwrap_or(repo_path.clone());
+            if repo_path_canon == repo_canon {
+                Some(info.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    candidates.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok((repo_name, candidates))
+}
+
+enum WorktreeSelection {
+    Selected(WorktreeInfo),
+    NoWorktrees,
+    Cancelled,
 }
 
 fn resolve_strategy(strategy: Option<MergeStrategy>, squash_flag: bool) -> Result<MergeStrategy> {
@@ -232,7 +371,14 @@ fn update_base_branch(main_repo_path: &Path, default_branch: &str) -> Result<()>
 }
 
 struct MergeOutcome {
-    squash_commit_message: Option<String>,
+    squash_commit_subject: Option<String>,
+    squash_detail: Option<String>,
+}
+
+struct CommitMessageParts {
+    subject: String,
+    body: Option<String>,
+    detail: Option<String>,
 }
 
 fn merge_branch(
@@ -247,14 +393,16 @@ fn merge_branch(
             println!("  {} Fast-forward merging {}", "→".blue(), branch.cyan());
             execute_git(&["merge", "--ff-only", &branch])?;
             Ok(MergeOutcome {
-                squash_commit_message: None,
+                squash_commit_subject: None,
+                squash_detail: None,
             })
         }
         MergeStrategy::Merge => {
             println!("  {} Merging {}", "→".blue(), branch.cyan());
             execute_git(&["merge", "--no-ff", &branch])?;
             Ok(MergeOutcome {
-                squash_commit_message: None,
+                squash_commit_subject: None,
+                squash_detail: None,
             })
         }
         MergeStrategy::Squash => {
@@ -270,11 +418,17 @@ fn merge_branch(
                 );
             }
 
-            let commit_message = format!("Squash merge {} into {}", branch, default_branch);
-            execute_git(&["commit", "-m", &commit_message])?;
+            let message = build_squash_commit_message(&branch, default_branch)?;
+
+            if let Some(body) = &message.body {
+                execute_git(&["commit", "-m", &message.subject, "-m", body])?;
+            } else {
+                execute_git(&["commit", "-m", &message.subject])?;
+            }
 
             Ok(MergeOutcome {
-                squash_commit_message: Some(commit_message),
+                squash_commit_subject: Some(message.subject),
+                squash_detail: message.detail,
             })
         }
     });
@@ -296,6 +450,57 @@ fn merge_branch(
             Err(err)
         }
     }
+}
+
+fn build_squash_commit_message(branch: &str, default_branch: &str) -> Result<CommitMessageParts> {
+    let detail = format!("Squash merge {} into {}", branch, default_branch);
+
+    let commit_count_output = execute_git(&[
+        "rev-list",
+        "--count",
+        &format!("{}..{}", default_branch, branch),
+    ])?;
+    let commit_count: u64 = commit_count_output
+        .trim()
+        .parse()
+        .context("Failed to parse commit count for squash merge")?;
+
+    if commit_count == 1 {
+        let raw_message = execute_git(&["log", "-1", "--pretty=%B", branch])?;
+        let trimmed = raw_message.trim_end_matches(|c| c == '\n' || c == '\r');
+
+        let mut parts = trimmed.splitn(2, '\n');
+        let subject = parts.next().unwrap_or_default().trim().to_string();
+        let remainder = parts.next().map(|s| s.to_string());
+
+        let body = remainder
+            .map(|mut s| {
+                while s.starts_with('\n') {
+                    s.remove(0);
+                }
+                s
+            })
+            .filter(|s| !s.is_empty());
+
+        let merged_body = match body {
+            Some(existing) if !existing.trim().is_empty() => {
+                Some(format!("{existing}\n\n{detail}"))
+            }
+            _ => Some(detail.clone()),
+        };
+
+        return Ok(CommitMessageParts {
+            subject,
+            body: merged_body,
+            detail: Some(detail),
+        });
+    }
+
+    Ok(CommitMessageParts {
+        subject: detail,
+        body: None,
+        detail: None,
+    })
 }
 
 fn push_default_branch(main_repo_path: &Path, default_branch: &str) -> Result<()> {

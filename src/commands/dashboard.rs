@@ -18,7 +18,7 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use crate::claude_status::{ClaudeStatus, ClaudeStatusDetector, PanelStatus, to_panel_status};
-use crate::commands::{handle_delete, handle_delete_task};
+use crate::commands::{MergeStrategy, handle_delete, handle_delete_task, handle_merge};
 use crate::git::{execute_git, get_diff_for_path, recent_git_logs, recent_git_logs_for_path};
 use crate::state::XlaudeState;
 use crate::tmux::{SessionInfo, TmuxManager};
@@ -69,8 +69,8 @@ pub struct Dashboard {
     diff_status_fingerprint: std::collections::HashMap<String, String>,
     // Throttle live tmux capture per worktree name
     preview_last_capture: std::collections::HashMap<String, std::time::Instant>,
-    // In-dashboard confirmation modal for delete
-    confirm_delete: Option<ConfirmDelete>,
+    // In-dashboard confirmation modal for actions (delete/merge)
+    confirm_dialog: Option<ConfirmDialog>,
 }
 
 struct WorktreeDisplay {
@@ -212,7 +212,7 @@ impl Dashboard {
             diff_last_check: std::collections::HashMap::new(),
             diff_status_fingerprint: std::collections::HashMap::new(),
             preview_last_capture: std::collections::HashMap::new(),
-            confirm_delete: None,
+            confirm_dialog: None,
         };
 
         dashboard.refresh_worktrees();
@@ -465,6 +465,45 @@ impl Dashboard {
                             }
                             self.refresh()?;
                         }
+                        InputResult::MergeWorktree(name) => {
+                            disable_raw_mode()?;
+                            execute!(
+                                terminal.backend_mut(),
+                                DisableMouseCapture,
+                                LeaveAlternateScreen
+                            )?;
+                            terminal.show_cursor()?;
+
+                            let res = handle_merge(
+                                Some(name.clone()),
+                                false,
+                                false,
+                                Some(MergeStrategy::Squash),
+                                false,
+                            );
+
+                            enable_raw_mode()?;
+                            execute!(
+                                terminal.backend_mut(),
+                                EnterAlternateScreen,
+                                EnableMouseCapture
+                            )?;
+                            terminal.hide_cursor()?;
+                            terminal.clear()?;
+
+                            match res {
+                                Ok(_) => {
+                                    self.status_message =
+                                        Some(format!("✅ Squash merged worktree: {}", name));
+                                    self.status_message_timer = 6;
+                                }
+                                Err(e) => {
+                                    self.status_message = Some(format!("❌ Merge failed: {}", e));
+                                    self.status_message_timer = 8;
+                                }
+                            }
+                            self.refresh()?;
+                        }
                         InputResult::DeleteTask(task) => {
                             disable_raw_mode()?;
                             execute!(
@@ -635,11 +674,11 @@ impl Dashboard {
 
     fn handle_input(&mut self, key: KeyEvent) -> Result<InputResult> {
         // If a confirm modal is open, handle its input exclusively
-        if let Some(ref mut confirm) = self.confirm_delete {
+        if let Some(ref mut confirm) = self.confirm_dialog {
             match key.code {
                 KeyCode::Esc => {
                     // Cancel
-                    self.confirm_delete = None;
+                    self.confirm_dialog = None;
                     return Ok(InputResult::Continue);
                 }
                 KeyCode::Left | KeyCode::Char('h') => {
@@ -652,24 +691,26 @@ impl Dashboard {
                 }
                 KeyCode::Char('y' | 'Y') => {
                     let target = confirm.target.clone();
-                    self.confirm_delete = None;
+                    self.confirm_dialog = None;
                     return Ok(match target {
-                        DeleteTarget::Worktree(n) => InputResult::DeleteWorktree(n),
-                        DeleteTarget::Task(t) => InputResult::DeleteTask(t),
+                        ConfirmTarget::DeleteWorktree(n) => InputResult::DeleteWorktree(n),
+                        ConfirmTarget::DeleteTask(t) => InputResult::DeleteTask(t),
+                        ConfirmTarget::MergeWorktree(n) => InputResult::MergeWorktree(n),
                     });
                 }
                 KeyCode::Char('n' | 'N') => {
-                    self.confirm_delete = None;
+                    self.confirm_dialog = None;
                     return Ok(InputResult::Continue);
                 }
                 KeyCode::Enter => {
                     let target = confirm.target.clone();
                     let yes = confirm.yes_selected;
-                    self.confirm_delete = None;
+                    self.confirm_dialog = None;
                     if yes {
                         return Ok(match target {
-                            DeleteTarget::Worktree(n) => InputResult::DeleteWorktree(n),
-                            DeleteTarget::Task(t) => InputResult::DeleteTask(t),
+                            ConfirmTarget::DeleteWorktree(n) => InputResult::DeleteWorktree(n),
+                            ConfirmTarget::DeleteTask(t) => InputResult::DeleteTask(t),
+                            ConfirmTarget::MergeWorktree(n) => InputResult::MergeWorktree(n),
                         });
                     } else {
                         return Ok(InputResult::Continue);
@@ -889,14 +930,24 @@ impl Dashboard {
                 if let Some(Some(worktree_idx)) = self.list_index_map.get(self.selected)
                     && let Some(worktree) = self.worktrees.get(*worktree_idx)
                 {
-                    self.confirm_delete = Some(ConfirmDelete {
-                        target: DeleteTarget::Worktree(worktree.name.clone()),
+                    self.confirm_dialog = Some(ConfirmDialog {
+                        target: ConfirmTarget::DeleteWorktree(worktree.name.clone()),
                         yes_selected: false, // default to No
                     });
                 } else if let Some(task) = self.header_task_map.get(&self.selected) {
-                    self.confirm_delete = Some(ConfirmDelete {
-                        target: DeleteTarget::Task(task.clone()),
+                    self.confirm_dialog = Some(ConfirmDialog {
+                        target: ConfirmTarget::DeleteTask(task.clone()),
                         yes_selected: false,
+                    });
+                }
+            }
+            KeyCode::Char('m' | 'M') => {
+                if let Some(Some(worktree_idx)) = self.list_index_map.get(self.selected)
+                    && let Some(worktree) = self.worktrees.get(*worktree_idx)
+                {
+                    self.confirm_dialog = Some(ConfirmDialog {
+                        target: ConfirmTarget::MergeWorktree(worktree.name.clone()),
+                        yes_selected: true, // default to Yes for merge convenience
                     });
                 }
             }
@@ -1022,6 +1073,8 @@ impl Dashboard {
                 Span::raw(" New  "),
                 Span::styled("d", Style::default().fg(Color::Yellow)),
                 Span::raw(" Delete  "),
+                Span::styled("m", Style::default().fg(Color::Yellow)),
+                Span::raw(" Merge (squash)  "),
                 Span::styled("f", Style::default().fg(Color::Yellow)),
                 Span::raw(" Follow-up (all)  "),
                 Span::styled("c", Style::default().fg(Color::Yellow)),
@@ -1080,6 +1133,8 @@ impl Dashboard {
                 Span::raw(" New  "),
                 Span::styled("d", Style::default().fg(Color::Yellow)),
                 Span::raw(" Delete  "),
+                Span::styled("m", Style::default().fg(Color::Yellow)),
+                Span::raw(" Merge (squash)  "),
                 Span::styled("f", Style::default().fg(Color::Yellow)),
                 Span::raw(" Follow-up (all)  "),
                 Span::styled("c", Style::default().fg(Color::Yellow)),
@@ -1146,8 +1201,8 @@ impl Dashboard {
         }
 
         // Render confirm delete dialog if present
-        if self.confirm_delete.is_some() {
-            self.render_confirm_delete_dialog(f);
+        if self.confirm_dialog.is_some() {
+            self.render_confirm_dialog(f);
         }
     }
 
@@ -1662,6 +1717,11 @@ impl Dashboard {
             ]),
             Line::from(vec![
                 Span::raw("  "),
+                Span::styled("m", Style::default().fg(Color::Yellow)),
+                Span::raw("      Squash merge selected worktree"),
+            ]),
+            Line::from(vec![
+                Span::raw("  "),
                 Span::styled("f", Style::default().fg(Color::Yellow)),
                 Span::raw("      Send follow-up to ALL agents"),
             ]),
@@ -1819,20 +1879,44 @@ impl Dashboard {
         f.render_widget(dialog, area);
     }
 
-    fn render_confirm_delete_dialog(&self, f: &mut Frame) {
+    fn render_confirm_dialog(&self, f: &mut Frame) {
         let area = centered_rect(60, 30, f.area());
         let clear = ratatui::widgets::Clear;
         f.render_widget(clear, area);
 
-        if let Some(ref confirm) = self.confirm_delete {
-            let (title, message) = match &confirm.target {
-                DeleteTarget::Worktree(name) => (
+        if let Some(ref confirm) = self.confirm_dialog {
+            let (title, message, mut extra_lines) = match &confirm.target {
+                ConfirmTarget::DeleteWorktree(name) => (
                     " Confirm Deletion ",
                     format!("Delete worktree '{}' ?", name),
+                    vec![Line::from(Span::styled(
+                        "This action cannot be undone.",
+                        Style::default().fg(Color::Yellow),
+                    ))],
                 ),
-                DeleteTarget::Task(task) => (
+                ConfirmTarget::DeleteTask(task) => (
                     " Confirm Deletion ",
                     format!("Delete ALL worktrees for task '{}' ?", task),
+                    vec![Line::from(Span::styled(
+                        "This action cannot be undone.",
+                        Style::default().fg(Color::Yellow),
+                    ))],
+                ),
+                ConfirmTarget::MergeWorktree(name) => (
+                    " Confirm Merge ",
+                    format!("Squash merge worktree '{}' ?", name),
+                    vec![
+                        Line::from(Span::styled(
+                            "Runs `agentdev worktree merge --strategy squash`.",
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::ITALIC),
+                        )),
+                        Line::from(Span::styled(
+                            "Push manually after review if needed.",
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                    ],
                 ),
             };
 
@@ -1843,12 +1927,9 @@ impl Dashboard {
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(
-                    "This action cannot be undone.",
-                    Style::default().fg(Color::Yellow),
-                )),
-                Line::from(""),
             ];
+            lines.append(&mut extra_lines);
+            lines.push(Line::from(""));
 
             // Buttons row
             let yes_style = if confirm.yes_selected {
@@ -1960,18 +2041,20 @@ enum InputResult {
     CreateWorktree(Option<String>, Option<String>), // optional name and optional repo context
     DeleteWorktree(String),
     DeleteTask(String),
+    MergeWorktree(String),
     Continue,
 }
 
 #[derive(Clone)]
-enum DeleteTarget {
-    Worktree(String),
-    Task(String),
+enum ConfirmTarget {
+    DeleteWorktree(String),
+    DeleteTask(String),
+    MergeWorktree(String),
 }
 
 #[derive(Clone)]
-struct ConfirmDelete {
-    target: DeleteTarget,
+struct ConfirmDialog {
+    target: ConfirmTarget,
     yes_selected: bool,
 }
 

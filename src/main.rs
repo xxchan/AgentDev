@@ -15,7 +15,7 @@ mod utils;
 
 use commands::{
     MergeStrategy, handle_add, handle_clean, handle_create, handle_delete, handle_delete_task_cli,
-    handle_dir, handle_list, handle_merge, handle_open, handle_rename, handle_start,
+    handle_dir, handle_exec, handle_list, handle_merge, handle_open, handle_rename, handle_start,
 };
 
 #[derive(Parser)]
@@ -140,6 +140,7 @@ fn main() -> Result<()> {
             WorktreeCommands::List { json } => handle_list(json),
             WorktreeCommands::Clean => handle_clean(),
             WorktreeCommands::Dir { name } => handle_dir(name),
+            WorktreeCommands::Exec { worktree, command } => handle_exec(worktree, command),
             WorktreeCommands::Merge {
                 name,
                 push,
@@ -216,6 +217,15 @@ enum WorktreeCommands {
     Dir {
         /// Name of the worktree (interactive selection if not provided)
         name: Option<String>,
+    },
+    /// Execute a command inside a worktree
+    Exec {
+        /// Name of the worktree to target (interactive selection if omitted)
+        #[arg(long)]
+        worktree: Option<String>,
+        /// Command to execute inside the worktree
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
     },
     /// Merge a worktree branch into the default branch
     Merge {
