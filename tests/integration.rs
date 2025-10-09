@@ -271,21 +271,16 @@ fn test_create_with_name() {
 }
 
 #[test]
-fn test_create_random_name() {
+fn test_create_requires_name_when_missing() {
     let ctx = TestContext::new("test-repo");
 
-    // Set fixed random seed for reproducibility
-    let output = ctx
-        .xlaude(&["create"])
-        .env("XLAUDE_TEST_SEED", "42")
-        .assert()
-        .success();
+    let output = ctx.xlaude(&["create"]).assert().failure();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
 
-    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
-
-    // Verify a worktree was created (name will vary based on random selection)
-    assert!(stdout.contains("Creating worktree"));
-    assert!(stdout.contains("Worktree created at"));
+    assert!(
+        stderr.contains("Worktree name is required"),
+        "expected error about missing worktree name, got: {stderr}",
+    );
 }
 
 #[test]

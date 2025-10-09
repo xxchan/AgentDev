@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::Colorize;
+use dialoguer::Input;
 use std::fs;
 use std::path::PathBuf;
 
@@ -8,9 +9,9 @@ use crate::commands::open::handle_open;
 use crate::git::{
     execute_git, extract_repo_name_from_url, get_repo_name, list_worktrees, update_submodules,
 };
-use crate::input::{get_command_arg, smart_confirm};
+use crate::input::{get_command_arg, is_piped_input, smart_confirm};
 use crate::state::{WorktreeInfo, XlaudeState};
-use crate::utils::{generate_random_name, sanitize_branch_name};
+use crate::utils::sanitize_branch_name;
 
 pub fn handle_create(name: Option<String>, agent: Option<String>) -> Result<()> {
     handle_create_in_dir(name, None, agent)
@@ -80,10 +81,30 @@ pub fn handle_create_in_dir_quiet(
         }
     }
 
-    // Get name from CLI args or pipe, generate if not provided
+    // Determine target branch/worktree name
     let branch_name = match get_command_arg(name)? {
         Some(n) => n,
-        None => generate_random_name()?,
+        None => {
+            if std::env::var("XLAUDE_NON_INTERACTIVE").is_ok() || is_piped_input() {
+                anyhow::bail!(
+                    "Worktree name is required. Please provide one as an argument or via piped input.",
+                );
+            }
+
+            // Interactive prompt when no name was supplied and we're in TTY mode
+            let input: String = Input::new()
+                .with_prompt("Enter a name for the new worktree")
+                .validate_with(|value: &String| -> Result<(), &str> {
+                    if value.trim().is_empty() {
+                        Err("Worktree name cannot be empty")
+                    } else {
+                        Ok(())
+                    }
+                })
+                .interact_text()
+                .context("Failed to read worktree name")?;
+            input.trim().to_string()
+        }
     };
 
     // Sanitize the branch name for use in directory names
