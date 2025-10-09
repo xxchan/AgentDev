@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 
 use crate::input::{get_command_arg, smart_select};
-use crate::state::{WorktreeInfo, XlaudeState};
+use crate::state::XlaudeState;
 
 pub fn handle_dir(name: Option<String>) -> Result<()> {
     let state = XlaudeState::load()?;
@@ -24,11 +24,7 @@ pub fn handle_dir(name: Option<String>) -> Result<()> {
             .context(format!("Worktree '{n}' not found"))?
     } else {
         // Interactive selection - show repo/name format
-        let worktree_list: Vec<(String, WorktreeInfo)> = state
-            .worktrees
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let worktree_list = state.prioritized_worktree_list();
 
         let selection = smart_select("Select a worktree", &worktree_list, |(_, info)| {
             format!("{}/{}", info.repo_name, info.name)

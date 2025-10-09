@@ -135,11 +135,7 @@ pub fn handle_open(name: Option<String>, agent: Option<String>) -> Result<()> {
             .context(format!("Worktree '{n}' not found"))?
     } else {
         // Interactive selection - show repo/name format
-        let worktree_list: Vec<(String, WorktreeInfo)> = state
-            .worktrees
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let worktree_list = state.prioritized_worktree_list();
 
         let selection = smart_select("Select a worktree to open", &worktree_list, |(_, info)| {
             format!("{}/{}", info.repo_name, info.name)

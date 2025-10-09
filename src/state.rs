@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::git::get_repo_name;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeInfo {
     pub name: String,
@@ -108,6 +110,33 @@ impl XlaudeState {
         let content = serde_json::to_string_pretty(self).context("Failed to serialize state")?;
         fs::write(&config_path, content).context("Failed to write config file")?;
         Ok(())
+    }
+
+    /// Return all managed worktrees, prioritizing the current repo when on a base branch.
+    pub fn prioritized_worktree_list(&self) -> Vec<(String, WorktreeInfo)> {
+        let entries: Vec<(String, WorktreeInfo)> = self
+            .worktrees
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        if let Ok(repo_name) = get_repo_name() {
+            let mut prioritized = Vec::with_capacity(entries.len());
+            let mut others = Vec::with_capacity(entries.len());
+
+            for entry in entries.into_iter() {
+                if entry.1.repo_name == repo_name {
+                    prioritized.push(entry);
+                } else {
+                    others.push(entry);
+                }
+            }
+
+            prioritized.extend(others);
+            return prioritized;
+        }
+
+        entries
     }
 }
 
