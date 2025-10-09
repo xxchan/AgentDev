@@ -104,6 +104,7 @@ enum Commands {
         format: String,
     },
     /// Launch interactive dashboard for managing Claude sessions
+    #[command(alias = "dash")]
     Dashboard,
     /// Start a multi-agent task and send an initial prompt
     Start {
