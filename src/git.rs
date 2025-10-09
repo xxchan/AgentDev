@@ -465,16 +465,77 @@ pub fn update_submodules(worktree_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn detect_default_branch_for_repo(repo: &str) -> Option<String> {
+    if let Ok(output) = execute_git(&["-C", repo, "remote", "show", "origin"]) {
+        for line in output.lines() {
+            if let Some(branch) = line.strip_prefix("  HEAD branch: ") {
+                return Some(branch.trim().to_string());
+            }
+        }
+    }
+
+    if let Ok(output) = execute_git(&["-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD"]) {
+        if let Some(branch) = output.strip_prefix("refs/remotes/origin/") {
+            return Some(branch.to_string());
+        }
+    }
+
+    None
+}
+
 /// Get a comprehensive git diff for the given worktree path.
 ///
 /// Behavior:
-/// - Shows both staged and unstaged changes relative to HEAD when possible
+/// - Shows committed changes relative to the repo's default branch when available
+/// - Shows both staged and unstaged changes relative to HEAD
 /// - Falls back to unstaged diff when HEAD doesn't exist (e.g., initial commit)
 /// - Includes untracked files by generating diffs against /dev/null
 pub fn get_diff_for_path(path: &Path) -> Result<String> {
     let repo = path
         .to_str()
         .context("worktree path contains non-UTF8 characters")?;
+
+    let diff_against = |range: &str| -> Option<String> {
+        let args = [
+            "-C",
+            repo,
+            "-c",
+            "core.quotepath=false",
+            "--no-pager",
+            "diff",
+            "--no-ext-diff",
+            range,
+        ];
+        execute_git_allow_code_1(&args)
+            .ok()
+            .filter(|s| !s.is_empty())
+    };
+
+    let mut commit_diff: Option<(String, String)> = None;
+    let mut branch_candidates: Vec<String> = Vec::new();
+    if let Some(detected) = detect_default_branch_for_repo(repo) {
+        branch_candidates.push(detected);
+    }
+    for fallback in ["main", "master"] {
+        if !branch_candidates.iter().any(|b| b == fallback) {
+            branch_candidates.push(fallback.to_string());
+        }
+    }
+
+    for branch in branch_candidates {
+        let remote_ref = format!("origin/{branch}");
+        let remote_range = format!("{remote_ref}...HEAD");
+        if let Some(diff) = diff_against(remote_range.as_str()) {
+            commit_diff = Some((remote_ref, diff));
+            break;
+        }
+
+        let local_range = format!("{branch}...HEAD");
+        if let Some(diff) = diff_against(local_range.as_str()) {
+            commit_diff = Some((branch, diff));
+            break;
+        }
+    }
 
     // Gather diffs explicitly to ensure unstaged changes are visible.
     // 1) Unstaged changes (working tree vs index)
@@ -501,15 +562,15 @@ pub fn get_diff_for_path(path: &Path) -> Result<String> {
     ])
     .unwrap_or_default();
 
-    let mut combined = String::new();
+    let mut sections: Vec<String> = Vec::new();
+    if let Some((source, diff)) = commit_diff {
+        sections.push(format!("### Committed changes (vs {source})\n{diff}"));
+    }
     if !unstaged.is_empty() {
-        combined.push_str(&unstaged);
+        sections.push(format!("### Unstaged changes\n{unstaged}"));
     }
     if !staged.is_empty() {
-        if !combined.is_empty() {
-            combined.push('\n');
-        }
-        combined.push_str(&staged);
+        sections.push(format!("### Staged changes\n{staged}"));
     }
 
     // Append diffs for untracked files by diffing /dev/null (or NUL on Windows) against each file.
@@ -541,15 +602,12 @@ pub fn get_diff_for_path(path: &Path) -> Result<String> {
                 f,
             ]) && !diff_new.is_empty()
             {
-                if !combined.is_empty() {
-                    combined.push('\n');
-                }
-                combined.push_str(&diff_new);
+                sections.push(format!("### Untracked file: {f}\n{diff_new}"));
             }
         }
     }
 
-    Ok(combined)
+    Ok(sections.join("\n\n"))
 }
 
 #[cfg(test)]
@@ -615,5 +673,41 @@ mod tests {
                 // The function should handle this gracefully
             }
         }
+    }
+
+    #[test]
+    fn test_get_diff_for_path_includes_committed_changes() {
+        use std::fs;
+
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let repo_path = temp.path();
+
+        let run_git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(repo_path)
+                .status()
+                .expect("execute git command");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+
+        run_git(&["init", "--initial-branch=main"]);
+        run_git(&["config", "user.email", "test@example.com"]);
+        run_git(&["config", "user.name", "Tester"]);
+
+        fs::write(repo_path.join("note.txt"), "line1\n").expect("write file");
+        run_git(&["add", "note.txt"]);
+        run_git(&["commit", "-m", "initial"]);
+
+        run_git(&["checkout", "-b", "feature"]);
+        fs::write(repo_path.join("note.txt"), "line1\nline2\n").expect("update file");
+        run_git(&["add", "note.txt"]);
+        run_git(&["commit", "-m", "feature work"]);
+
+        let diff = get_diff_for_path(repo_path).expect("collect diff");
+        assert!(
+            diff.contains("+line2"),
+            "diff did not include committed change: {diff}"
+        );
     }
 }
