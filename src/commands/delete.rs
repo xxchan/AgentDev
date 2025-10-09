@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
+use std::io;
 
 use crate::git::{execute_git, has_unpushed_commits, is_working_tree_clean};
 use crate::input::{get_command_arg, smart_confirm};
@@ -276,27 +277,62 @@ fn remove_worktree(worktree_info: &WorktreeInfo, config: &DeletionConfig) -> Res
     if config.worktree_exists {
         println!("{} Removing worktree...", "🗑️ ".yellow());
 
-        // First attempt: try normal removal
-        let result = execute_git(&["worktree", "remove", worktree_info.path.to_str().unwrap()]);
+        let path_str = worktree_info.path.to_str().unwrap();
 
-        // If failed, might be due to submodules - try with force flag
-        if result.is_err() {
-            println!(
-                "{} Standard removal failed, trying force removal...",
-                "⚠️ ".yellow()
-            );
-            execute_git(&[
-                "worktree",
-                "remove",
-                "--force",
-                worktree_info.path.to_str().unwrap(),
-            ])
-            .context("Failed to force remove worktree")?;
+        match execute_git(&["worktree", "remove", path_str]) {
+            Ok(_) => {}
+            Err(err) if is_not_worktree_error(&err) => {
+                cleanup_stale_worktree(worktree_info)?;
+            }
+            Err(_) => {
+                println!(
+                    "{} Standard removal failed, trying force removal...",
+                    "⚠️ ".yellow()
+                );
+                match execute_git(&["worktree", "remove", "--force", path_str]) {
+                    Ok(_) => {}
+                    Err(force_err) if is_not_worktree_error(&force_err) => {
+                        cleanup_stale_worktree(worktree_info)?;
+                    }
+                    Err(force_err) => {
+                        return Err(force_err).context("Failed to force remove worktree");
+                    }
+                }
+            }
         }
     } else {
         println!("{} Pruning non-existent worktree...", "🗑️ ".yellow());
         execute_git(&["worktree", "prune"]).context("Failed to prune worktree")?;
     }
+    Ok(())
+}
+
+fn is_not_worktree_error(err: &anyhow::Error) -> bool {
+    err.to_string().contains("is not a working tree")
+}
+
+fn cleanup_stale_worktree(worktree_info: &WorktreeInfo) -> Result<()> {
+    println!(
+        "{} Git no longer recognizes this directory as a worktree; cleaning up stale state",
+        "ℹ️".blue()
+    );
+
+    if worktree_info.path.exists() {
+        match std::fs::remove_dir_all(&worktree_info.path) {
+            Ok(_) => {}
+            Err(fs_err) if fs_err.kind() == io::ErrorKind::NotFound => {}
+            Err(fs_err) => {
+                return Err(fs_err).with_context(|| {
+                    format!(
+                        "Failed to remove stale worktree directory at {}",
+                        worktree_info.path.display()
+                    )
+                });
+            }
+        }
+    }
+
+    execute_git(&["worktree", "prune"]).context("Failed to prune stale worktree entries")?;
     Ok(())
 }
 
