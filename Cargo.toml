@@ -5,6 +5,10 @@ edition = "2024"
 description = "A CLI tool for managing Agent instances with git worktree"
 license = "Apache-2.0"
 
+[lib]
+name = "agentdev"
+path = "src/lib.rs"
+
 [dependencies]
 clap = { version = "4.5.42", features = ["derive", "env"] }
 clap_complete = "4.5.42"

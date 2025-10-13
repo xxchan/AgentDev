@@ -16,6 +16,7 @@ mod utils;
 use commands::{
     MergeStrategy, handle_add, handle_clean, handle_create, handle_delete, handle_delete_task_cli,
     handle_dir, handle_exec, handle_list, handle_merge, handle_open, handle_rename, handle_start,
+    handle_ui,
 };
 
 #[derive(Parser)]
@@ -123,6 +124,12 @@ enum Commands {
         /// Task name
         task_name: Option<String>,
     },
+    /// Launch web UI for agent management
+    Ui {
+        /// Port to run the web server on
+        #[arg(long, default_value = "3000")]
+        port: u16,
+    },
 }
 
 fn main() -> Result<()> {
@@ -159,6 +166,7 @@ fn main() -> Result<()> {
             name,
         } => handle_start(prompt, agents, name),
         Commands::DeleteTask { task_name } => handle_delete_task_cli(task_name),
+        Commands::Ui { port } => handle_ui(port),
         // Backward-compatible routing
         Commands::Create { name, agent } => handle_create(name, agent),
         Commands::Open { name, agent } => handle_open(name, agent),

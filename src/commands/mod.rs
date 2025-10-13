@@ -12,6 +12,7 @@ pub mod merge;
 pub mod open;
 pub mod rename;
 pub mod start;
+pub mod ui;
 
 pub use add::handle_add;
 pub use clean::handle_clean;
@@ -27,3 +28,4 @@ pub use merge::{MergeStrategy, handle_merge};
 pub use open::handle_open;
 pub use rename::handle_rename;
 pub use start::handle_start;
+pub use ui::handle_ui;
