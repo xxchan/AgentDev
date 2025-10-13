@@ -11,6 +11,7 @@ pub mod list;
 pub mod merge;
 pub mod open;
 pub mod rename;
+pub mod sessions;
 pub mod start;
 pub mod ui;
 
@@ -27,5 +28,6 @@ pub use list::handle_list;
 pub use merge::{MergeStrategy, handle_merge};
 pub use open::handle_open;
 pub use rename::handle_rename;
+pub use sessions::handle_sessions_list;
 pub use start::handle_start;
 pub use ui::handle_ui;

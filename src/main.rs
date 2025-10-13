@@ -9,14 +9,15 @@ mod completions;
 mod config;
 mod git;
 mod input;
+mod sessions;
 mod state;
 mod tmux;
 mod utils;
 
 use commands::{
     MergeStrategy, handle_add, handle_clean, handle_create, handle_delete, handle_delete_task_cli,
-    handle_dir, handle_exec, handle_list, handle_merge, handle_open, handle_rename, handle_start,
-    handle_ui,
+    handle_dir, handle_exec, handle_list, handle_merge, handle_open, handle_rename,
+    handle_sessions_list, handle_start, handle_ui,
 };
 
 #[derive(Parser)]
@@ -43,6 +44,11 @@ enum Commands {
     Worktree {
         #[command(subcommand)]
         cmd: WorktreeCommands,
+    },
+    /// Session inspection commands
+    Sessions {
+        #[command(subcommand)]
+        cmd: SessionCommands,
     },
     // Backward-compatible top-level commands (temporarily retained)
     #[command(hide = true)]
@@ -157,6 +163,9 @@ fn main() -> Result<()> {
                 squash,
             } => handle_merge(name, push, cleanup, strategy, squash),
         },
+        Commands::Sessions { cmd } => match cmd {
+            SessionCommands::List { worktree, json } => handle_sessions_list(worktree, json),
+        },
         Commands::Completions { shell } => completions::handle_completions(shell),
         Commands::CompleteWorktrees { format } => commands::handle_complete_worktrees(&format),
         Commands::Dashboard => commands::handle_dashboard(),
@@ -252,5 +261,18 @@ enum WorktreeCommands {
         /// Shortcut for --strategy squash
         #[arg(long)]
         squash: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionCommands {
+    /// List known sessions grouped by provider and worktree
+    List {
+        /// Filter sessions by worktree key or name
+        #[arg(long)]
+        worktree: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
