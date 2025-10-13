@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, TimeZone, Utc};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -481,6 +482,166 @@ fn detect_default_branch_for_repo(repo: &str) -> Option<String> {
     }
 
     None
+}
+
+#[derive(Debug, Clone)]
+pub struct WorktreeGitStatus {
+    pub branch: String,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub staged: usize,
+    pub unstaged: usize,
+    pub untracked: usize,
+    pub conflicts: usize,
+    pub is_clean: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct HeadCommitInfo {
+    pub commit_id: String,
+    pub summary: String,
+    pub timestamp: Option<DateTime<Utc>>,
+}
+
+/// Summarize the git status for a worktree.
+pub fn summarize_worktree_status(path: &Path, fallback_branch: &str) -> Result<WorktreeGitStatus> {
+    let repo = path
+        .to_str()
+        .context("worktree path contains invalid UTF-8")?;
+
+    let raw = execute_git(&["-C", repo, "status", "--porcelain=2", "--branch"])?;
+
+    let mut status = WorktreeGitStatus {
+        branch: String::new(),
+        upstream: None,
+        ahead: 0,
+        behind: 0,
+        staged: 0,
+        unstaged: 0,
+        untracked: 0,
+        conflicts: 0,
+        is_clean: true,
+    };
+
+    for line in raw.lines() {
+        if let Some(head) = line.strip_prefix("# branch.head ") {
+            status.branch = head.trim().to_string();
+            continue;
+        }
+        if let Some(upstream) = line.strip_prefix("# branch.upstream ") {
+            status.upstream = Some(upstream.trim().to_string());
+            continue;
+        }
+        if let Some(ab) = line.strip_prefix("# branch.ab ") {
+            for token in ab.split_whitespace() {
+                if let Some(val) = token.strip_prefix('+') {
+                    if let Ok(parsed) = val.parse::<u32>() {
+                        status.ahead = parsed;
+                    }
+                } else if let Some(val) = token.strip_prefix('-') {
+                    if let Ok(parsed) = val.parse::<u32>() {
+                        status.behind = parsed;
+                    }
+                }
+            }
+            continue;
+        }
+        if line.starts_with("? ") {
+            status.untracked += 1;
+            continue;
+        }
+        if line.starts_with("! ") {
+            continue;
+        }
+        if line.starts_with("u ") {
+            status.conflicts += 1;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("1 ") {
+            note_status_tokens(&mut status, rest);
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("2 ") {
+            note_status_tokens(&mut status, rest);
+            continue;
+        }
+    }
+
+    if status.branch.is_empty() {
+        status.branch = fallback_branch.to_string();
+    }
+    status.is_clean = status.staged == 0
+        && status.unstaged == 0
+        && status.untracked == 0
+        && status.conflicts == 0;
+
+    Ok(status)
+}
+
+fn note_status_tokens(status: &mut WorktreeGitStatus, rest: &str) {
+    if let Some(token) = rest.split_whitespace().next() {
+        let mut chars = token.chars();
+        let index = chars.next().unwrap_or('.');
+        let worktree = chars.next().unwrap_or('.');
+
+        let conflict = index == 'U' || worktree == 'U';
+        if conflict {
+            status.conflicts += 1;
+            return;
+        }
+        if index != '.' {
+            status.staged += 1;
+        }
+        if worktree != '.' {
+            status.unstaged += 1;
+        }
+    }
+}
+
+/// Get information about the HEAD commit in a worktree, if any.
+pub fn head_commit_info(path: &Path) -> Result<Option<HeadCommitInfo>> {
+    let repo = path
+        .to_str()
+        .context("worktree path contains invalid UTF-8")?;
+
+    let args = ["-C", repo, "log", "-1", "--pretty=format:%H\x00%ct\x00%s"];
+
+    let raw = match execute_git(&args) {
+        Ok(output) => output,
+        Err(err) => {
+            let message = err.to_string();
+            if message.contains("does not have any commits yet")
+                || message.contains("unknown revision or path not in the working tree")
+                || message.contains("Needed a single revision")
+            {
+                return Ok(None);
+            }
+            return Err(err);
+        }
+    };
+
+    if raw.is_empty() {
+        return Ok(None);
+    }
+
+    let mut parts = raw.split('\0');
+    let commit_id = parts.next().unwrap_or_default().trim().to_string();
+    let timestamp = parts
+        .next()
+        .and_then(|ts| ts.parse::<i64>().ok())
+        .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
+    let summary = parts.next().unwrap_or_default().trim().to_string();
+
+    if commit_id.is_empty() && summary.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(HeadCommitInfo {
+        commit_id,
+        summary,
+        timestamp,
+    }))
 }
 
 /// Get a comprehensive git diff for the given worktree path.

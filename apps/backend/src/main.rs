@@ -6,8 +6,10 @@ use axum::{
     Router,
 };
 use rust_embed::RustEmbed;
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use tokio::net::TcpListener;
+use std::sync::Arc;
+use tokio::{net::TcpListener, sync::RwLock};
 use tower_http::cors::CorsLayer;
 
 mod api;
@@ -22,22 +24,43 @@ struct FrontendAssets;
 
 #[derive(Clone)]
 pub struct AppState {
-    // Add shared state here as needed
+    pub tasks: Arc<RwLock<HashMap<String, Task>>>,
+}
+
+impl AppState {
+    fn new() -> Result<Self> {
+        let tasks = load_tasks_from_state()?;
+        let task_count = tasks.len();
+        if task_count > 0 {
+            println!("Restored {} task(s) from previous state", task_count);
+        }
+        Ok(Self {
+            tasks: Arc::new(RwLock::new(tasks)),
+        })
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Starting agentdev UI server...");
 
-    let state = AppState {};
+    let state = AppState::new()?;
 
     let app = Router::new()
         // API routes
+        .route("/api/worktrees", get(get_worktrees))
+        .route("/api/worktrees/:worktree_id", get(get_worktree))
         .route("/api/tasks", get(get_tasks).post(create_task))
         .route("/api/tasks/:task_id", delete(delete_task))
-        .route("/api/tasks/:task_id/agents/:agent_id/diff", get(get_agent_diff))
-        // WebSocket routes  
-        .route("/ws/tasks/:task_id/agents/:agent_id/attach", get(websocket_handler))
+        .route(
+            "/api/tasks/:task_id/agents/:agent_id/diff",
+            get(get_agent_diff),
+        )
+        // WebSocket routes
+        .route(
+            "/ws/tasks/:task_id/agents/:agent_id/attach",
+            get(websocket_handler),
+        )
         // Static file serving (fallback to index.html for SPA)
         .fallback(serve_frontend)
         .layer(CorsLayer::permissive())
@@ -50,22 +73,25 @@ async fn main() -> Result<()> {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = TcpListener::bind(addr).await?;
-    
+
     println!("🚀 AgentDev UI server running on http://localhost:{}", port);
-    
+
     // Auto-open browser
     if let Err(e) = open_browser(port) {
-        println!("Failed to open browser: {}. Please manually visit http://localhost:{}", e, port);
+        println!(
+            "Failed to open browser: {}. Please manually visit http://localhost:{}",
+            e, port
+        );
     }
 
     axum::serve(listener, app).await?;
-    
+
     Ok(())
 }
 
 async fn serve_frontend(uri: axum::http::Uri) -> impl IntoResponse {
     let path = uri.path().trim_start_matches('/');
-    
+
     if path.is_empty() || !path.contains('.') {
         // Serve index.html for SPA routing
         serve_file("index.html")
@@ -88,7 +114,9 @@ fn serve_file(path: &str) -> Response {
         None => {
             // Try to serve index.html as fallback for SPA
             match FrontendAssets::get("index.html") {
-                Some(content) => Html(String::from_utf8_lossy(&content.data).to_string()).into_response(),
+                Some(content) => {
+                    Html(String::from_utf8_lossy(&content.data).to_string()).into_response()
+                }
                 None => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
             }
         }
@@ -97,15 +125,17 @@ fn serve_file(path: &str) -> Response {
 
 fn open_browser(port: u16) -> Result<()> {
     let url = format!("http://localhost:{}", port);
-    
+
     #[cfg(target_os = "macos")]
     std::process::Command::new("open").arg(&url).spawn()?;
-    
+
     #[cfg(target_os = "linux")]
     std::process::Command::new("xdg-open").arg(&url).spawn()?;
-    
+
     #[cfg(target_os = "windows")]
-    std::process::Command::new("cmd").args(&["/c", "start", &url]).spawn()?;
-    
+    std::process::Command::new("cmd")
+        .args(&["/c", "start", &url])
+        .spawn()?;
+
     Ok(())
 }

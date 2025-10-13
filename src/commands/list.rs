@@ -1,12 +1,11 @@
-use anyhow::{Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use anyhow::Result;
+use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use crate::claude::get_claude_sessions;
-use crate::git::execute_git;
+use crate::git::{HeadCommitInfo, WorktreeGitStatus, head_commit_info, summarize_worktree_status};
 use crate::state::XlaudeState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,7 +111,8 @@ pub fn handle_list(json: bool) -> Result<()> {
                 })
                 .collect();
 
-            let git_status = summarize_git_status(&info.path, &info.branch)
+            let git_status = summarize_worktree_status(&info.path, &info.branch)
+                .map(JsonGitStatus::from)
                 .map_err(|err| {
                     eprintln!(
                         "⚠️  Failed to inspect git status for {}: {err}",
@@ -122,7 +122,8 @@ pub fn handle_list(json: bool) -> Result<()> {
                 })
                 .ok();
 
-            let head_commit = collect_head_commit(&info.path)
+            let head_commit = head_commit_info(&info.path)
+                .map(|info_opt| info_opt.map(JsonCommitInfo::from))
                 .map_err(|err| {
                     eprintln!(
                         "⚠️  Failed to read last commit for {}: {err}",
@@ -268,140 +269,28 @@ pub fn handle_list(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn summarize_git_status(worktree_path: &Path, fallback_branch: &str) -> Result<JsonGitStatus> {
-    let repo = worktree_path
-        .to_str()
-        .context("worktree path contains invalid UTF-8")?;
-
-    let raw = execute_git(&["-C", repo, "status", "--porcelain=2", "--branch"])?;
-
-    let mut status = JsonGitStatus {
-        branch: String::new(),
-        upstream: None,
-        ahead: 0,
-        behind: 0,
-        staged: 0,
-        unstaged: 0,
-        untracked: 0,
-        conflicts: 0,
-        is_clean: true,
-    };
-
-    for line in raw.lines() {
-        if let Some(head) = line.strip_prefix("# branch.head ") {
-            status.branch = head.trim().to_string();
-            continue;
-        }
-        if let Some(upstream) = line.strip_prefix("# branch.upstream ") {
-            status.upstream = Some(upstream.trim().to_string());
-            continue;
-        }
-        if let Some(ab) = line.strip_prefix("# branch.ab ") {
-            for token in ab.split_whitespace() {
-                if let Some(val) = token.strip_prefix('+') {
-                    if let Ok(parsed) = val.parse::<u32>() {
-                        status.ahead = parsed;
-                    }
-                } else if let Some(val) = token.strip_prefix('-') {
-                    if let Ok(parsed) = val.parse::<u32>() {
-                        status.behind = parsed;
-                    }
-                }
-            }
-            continue;
-        }
-        if line.starts_with("? ") {
-            status.untracked += 1;
-            continue;
-        }
-        if line.starts_with("! ") {
-            continue;
-        }
-        if line.starts_with("u ") {
-            status.conflicts += 1;
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("1 ") {
-            note_status_tokens(&mut status, rest);
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("2 ") {
-            note_status_tokens(&mut status, rest);
-            continue;
-        }
-    }
-
-    if status.branch.is_empty() {
-        status.branch = fallback_branch.to_string();
-    }
-    status.is_clean = status.staged == 0
-        && status.unstaged == 0
-        && status.untracked == 0
-        && status.conflicts == 0;
-
-    Ok(status)
-}
-
-fn note_status_tokens(status: &mut JsonGitStatus, rest: &str) {
-    if let Some(token) = rest.split_whitespace().next() {
-        let mut chars = token.chars();
-        let index = chars.next().unwrap_or('.');
-        let worktree = chars.next().unwrap_or('.');
-
-        let conflict = index == 'U' || worktree == 'U';
-        if conflict {
-            status.conflicts += 1;
-            return;
-        }
-        if index != '.' {
-            status.staged += 1;
-        }
-        if worktree != '.' {
-            status.unstaged += 1;
+impl From<WorktreeGitStatus> for JsonGitStatus {
+    fn from(value: WorktreeGitStatus) -> Self {
+        Self {
+            branch: value.branch,
+            upstream: value.upstream,
+            ahead: value.ahead,
+            behind: value.behind,
+            staged: value.staged,
+            unstaged: value.unstaged,
+            untracked: value.untracked,
+            conflicts: value.conflicts,
+            is_clean: value.is_clean,
         }
     }
 }
 
-fn collect_head_commit(worktree_path: &Path) -> Result<Option<JsonCommitInfo>> {
-    let repo = worktree_path
-        .to_str()
-        .context("worktree path contains invalid UTF-8")?;
-
-    let args = ["-C", repo, "log", "-1", "--pretty=format:%H\x00%ct\x00%s"];
-
-    let raw = match execute_git(&args) {
-        Ok(output) => output,
-        Err(err) => {
-            let message = err.to_string();
-            if message.contains("does not have any commits yet")
-                || message.contains("unknown revision or path not in the working tree")
-                || message.contains("Needed a single revision")
-            {
-                return Ok(None);
-            }
-            return Err(err);
+impl From<HeadCommitInfo> for JsonCommitInfo {
+    fn from(value: HeadCommitInfo) -> Self {
+        Self {
+            commit_id: value.commit_id,
+            summary: value.summary,
+            timestamp: value.timestamp,
         }
-    };
-
-    if raw.is_empty() {
-        return Ok(None);
     }
-
-    let mut parts = raw.split('\0');
-    let commit_id = parts.next().unwrap_or_default().trim().to_string();
-    let timestamp = parts
-        .next()
-        .and_then(|ts| ts.parse::<i64>().ok())
-        .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
-    let summary = parts.next().unwrap_or_default().trim().to_string();
-
-    if commit_id.is_empty() && summary.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(JsonCommitInfo {
-        commit_id,
-        summary,
-        timestamp,
-    }))
 }
