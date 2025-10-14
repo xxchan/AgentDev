@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -18,14 +19,16 @@ use agentdev::{
     claude::get_claude_sessions,
     config::{load_agent_config, split_cmdline},
     git::{
-        collect_worktree_diff_breakdown, execute_git, get_diff_for_path, get_repo_name,
-        head_commit_info, summarize_worktree_status, update_submodules, HeadCommitInfo,
-        WorktreeGitStatus,
+        collect_worktree_diff_breakdown, commits_since_merge_base, execute_git, get_diff_for_path,
+        get_repo_name, head_commit_info, summarize_worktree_status, update_submodules,
+        CommitsAhead, HeadCommitInfo, WorktreeGitStatus,
     },
+    sessions::{canonicalize as canonicalize_session_path, default_providers, SessionRecord},
     state::{WorktreeInfo, XlaudeState},
     tmux::TmuxManager,
     utils::generate_random_name,
 };
+use rayon::prelude::*;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Task {
@@ -69,8 +72,10 @@ pub struct CreateTaskResponse {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct WorktreeSessionSummary {
     pub provider: String,
+    pub session_id: String,
     pub last_user_message: String,
     pub last_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub user_messages: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -94,6 +99,13 @@ pub struct WorktreeCommitPayload {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+pub struct WorktreeCommitsAheadPayload {
+    pub base_branch: String,
+    pub merge_base: Option<String>,
+    pub commits: Vec<WorktreeCommitPayload>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct WorktreeSummary {
     pub id: String,
     pub name: String,
@@ -108,6 +120,7 @@ pub struct WorktreeSummary {
     pub agent_alias: Option<String>,
     pub git_status: Option<WorktreeGitStatusPayload>,
     pub head_commit: Option<WorktreeCommitPayload>,
+    pub commits_ahead: Option<WorktreeCommitsAheadPayload>,
     pub sessions: Vec<WorktreeSessionSummary>,
 }
 
@@ -164,6 +177,20 @@ impl From<HeadCommitInfo> for WorktreeCommitPayload {
     }
 }
 
+impl From<CommitsAhead> for WorktreeCommitsAheadPayload {
+    fn from(value: CommitsAhead) -> Self {
+        Self {
+            base_branch: value.base_branch,
+            merge_base: value.merge_base,
+            commits: value
+                .commits
+                .into_iter()
+                .map(WorktreeCommitPayload::from)
+                .collect(),
+        }
+    }
+}
+
 static WORKTREE_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn warn_once(operation: &str, path: &Path, render: impl FnOnce() -> String) {
@@ -204,6 +231,185 @@ fn git_metadata_present(path: &Path) -> bool {
         }
     }
     false
+}
+
+struct NormalizedSession {
+    record: SessionRecord,
+    canonical_dir: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+struct WorktreeProfiler {
+    enabled: bool,
+}
+
+impl WorktreeProfiler {
+    fn new() -> Self {
+        let enabled = std::env::var("AGENTDEV_PROFILE_WORKTREES")
+            .map(|value| value != "0")
+            .unwrap_or(false);
+        Self { enabled }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn measure<T, F>(&self, label: &str, f: F) -> T
+    where
+        F: FnOnce() -> T,
+    {
+        if !self.enabled {
+            return f();
+        }
+        let start = Instant::now();
+        let value = f();
+        println!(
+            "[profile/worktrees] {label} took {:?}",
+            start.elapsed()
+        );
+        value
+    }
+
+    fn measure_result<T, E, F>(&self, label: &str, f: F) -> std::result::Result<T, E>
+    where
+        F: FnOnce() -> std::result::Result<T, E>,
+    {
+        if !self.enabled {
+            return f();
+        }
+        let start = Instant::now();
+        let result = f();
+        println!(
+            "[profile/worktrees] {label} took {:?}",
+            start.elapsed()
+        );
+        result
+    }
+
+    fn measure_worktree<T, F>(&self, worktree_id: &str, label: &str, f: F) -> T
+    where
+        F: FnOnce() -> T,
+    {
+        if !self.enabled {
+            return f();
+        }
+        let start = Instant::now();
+        let value = f();
+        println!(
+            "[profile/worktrees] {worktree_id}::{label} took {:?}",
+            start.elapsed()
+        );
+        value
+    }
+
+    fn measure_worktree_result<T, E, F>(
+        &self,
+        worktree_id: &str,
+        label: &str,
+        f: F,
+    ) -> std::result::Result<T, E>
+    where
+        F: FnOnce() -> std::result::Result<T, E>,
+    {
+        if !self.enabled {
+            return f();
+        }
+        let start = Instant::now();
+        let result = f();
+        println!(
+            "[profile/worktrees] {worktree_id}::{label} took {:?}",
+            start.elapsed()
+        );
+        result
+    }
+}
+
+fn collect_external_sessions(profiler: &WorktreeProfiler) -> Vec<NormalizedSession> {
+    profiler.measure("sessions.total", || {
+        let mut collected = Vec::new();
+
+        for provider in default_providers() {
+            let provider_name = provider.name();
+            let records_result = if profiler.enabled() {
+                let start = Instant::now();
+                let outcome = provider.list_sessions();
+                println!(
+                    "[profile/worktrees] sessions::{provider_name} took {:?}",
+                    start.elapsed()
+                );
+                outcome
+            } else {
+                provider.list_sessions()
+            };
+
+            match records_result {
+                Ok(records) => {
+                    for record in records {
+                        let canonical_dir = record
+                            .working_dir
+                            .as_ref()
+                            .and_then(|dir| canonicalize_session_path(dir));
+                        collected.push(NormalizedSession {
+                            canonical_dir,
+                            record,
+                        });
+                    }
+                }
+                Err(err) => {
+                    eprintln!(
+                        "⚠️  Failed to list sessions from {}: {err}",
+                        provider_name
+                    );
+                }
+            }
+        }
+
+        collected
+    })
+}
+
+fn match_sessions_for_worktree(
+    info: &WorktreeInfo,
+    external_sessions: &[NormalizedSession],
+) -> Vec<WorktreeSessionSummary> {
+    if external_sessions.is_empty() {
+        return Vec::new();
+    }
+
+    let canonical_worktree = canonicalize_session_path(&info.path);
+    let base_path = canonical_worktree
+        .as_ref()
+        .map(PathBuf::as_path)
+        .unwrap_or_else(|| info.path.as_path());
+
+    let mut summaries = Vec::new();
+    for session in external_sessions {
+        let working_dir = session
+            .canonical_dir
+            .as_ref()
+            .map(PathBuf::as_path)
+            .or_else(|| session.record.working_dir.as_ref().map(PathBuf::as_path));
+
+        let Some(working_dir) = working_dir else {
+            continue;
+        };
+
+        if working_dir.starts_with(base_path) {
+            summaries.push(WorktreeSessionSummary {
+                provider: session.record.provider.clone(),
+                session_id: session.record.id.clone(),
+                last_user_message: session
+                    .record
+                    .last_user_message
+                    .clone()
+                    .unwrap_or_default(),
+                last_timestamp: session.record.last_timestamp,
+                user_messages: session.record.user_messages.clone(),
+            });
+        }
+    }
+    summaries
 }
 
 /// GET /api/worktrees - Get enriched worktree metadata
@@ -247,14 +453,55 @@ pub async fn get_worktree(AxumPath(worktree_id): AxumPath<String>) -> impl IntoR
 }
 
 fn collect_worktree_summaries() -> Result<WorktreeListResponse> {
-    let state = XlaudeState::load()?;
-    let mut summaries: Vec<WorktreeSummary> = state
+    let profiler = WorktreeProfiler::new();
+    let overall_start = if profiler.enabled() {
+        Some(Instant::now())
+    } else {
+        None
+    };
+
+    let state = profiler
+        .measure_result("state.load", || XlaudeState::load())?;
+
+    let session_profiler = profiler.clone();
+    let session_handle = std::thread::spawn(move || collect_external_sessions(&session_profiler));
+
+    let worktree_entries: Vec<(String, WorktreeInfo)> = state
         .worktrees
         .iter()
-        .map(|(id, info)| summarize_single_worktree(id, info))
+        .map(|(id, info)| (id.clone(), info.clone()))
+        .collect();
+
+    let external_sessions = session_handle
+        .join()
+        .unwrap_or_else(|_| Vec::new());
+    let external_sessions = Arc::new(external_sessions);
+
+    let mut summaries: Vec<WorktreeSummary> = worktree_entries
+        .into_par_iter()
+        .map(|(id, info)| {
+            let profiler = profiler.clone();
+            let sessions = external_sessions.clone();
+            profiler.measure_worktree(&id, "summarize", || {
+                summarize_single_worktree(
+                    &id,
+                    &info,
+                    sessions.as_ref().as_slice(),
+                    &profiler,
+                )
+            })
+        })
         .collect();
 
     summaries.sort_by(|a, b| b.last_activity_at.cmp(&a.last_activity_at));
+
+    if let Some(start) = overall_start {
+        println!(
+            "[profile/worktrees] total took {:?} ({} worktrees)",
+            start.elapsed(),
+            summaries.len()
+        );
+    }
 
     Ok(WorktreeListResponse {
         worktrees: summaries,
@@ -282,14 +529,38 @@ impl From<agentdev::git::CommitDiffInfo> for WorktreeCommitDiffPayload {
 }
 
 fn collect_worktree_summary(id: String) -> Result<Option<WorktreeSummary>> {
-    let state = XlaudeState::load()?;
-    Ok(state
-        .worktrees
-        .get(&id)
-        .map(|info| summarize_single_worktree(&id, info)))
+    let profiler = WorktreeProfiler::new();
+    let overall_start = if profiler.enabled() {
+        Some(Instant::now())
+    } else {
+        None
+    };
+
+    let state = profiler
+        .measure_result("state.load", || XlaudeState::load())?;
+    let external_sessions = collect_external_sessions(&profiler);
+    let summary = state.worktrees.get(&id).map(|info| {
+        profiler.measure_worktree(&id, "summarize", || {
+            summarize_single_worktree(&id, info, &external_sessions, &profiler)
+        })
+    });
+
+    if let Some(start) = overall_start {
+        println!(
+            "[profile/worktrees] total_single::{id} took {:?}",
+            start.elapsed()
+        );
+    }
+
+    Ok(summary)
 }
 
-fn summarize_single_worktree(id: &str, info: &WorktreeInfo) -> WorktreeSummary {
+fn summarize_single_worktree(
+    id: &str,
+    info: &WorktreeInfo,
+    external_sessions: &[NormalizedSession],
+    profiler: &WorktreeProfiler,
+) -> WorktreeSummary {
     let path_exists = info.path.exists();
     let git_ready = path_exists && git_metadata_present(&info.path);
 
@@ -303,18 +574,20 @@ fn summarize_single_worktree(id: &str, info: &WorktreeInfo) -> WorktreeSummary {
     }
 
     let git_status = if git_ready {
-        summarize_worktree_status(&info.path, &info.branch)
-            .map(WorktreeGitStatusPayload::from)
-            .map_err(|err| {
+        match profiler.measure_worktree_result(id, "git_status", || {
+            summarize_worktree_status(&info.path, &info.branch)
+        }) {
+            Ok(status) => Some(WorktreeGitStatusPayload::from(status)),
+            Err(err) => {
                 warn_once("git_status", &info.path, || {
                     format!(
                         "⚠️  Failed to inspect git status for {}: {err}",
                         info.path.display()
                     )
                 });
-                err
-            })
-            .ok()
+                None
+            }
+        }
     } else if !path_exists {
         warn_once("missing_path", &info.path, || {
             format!(
@@ -328,36 +601,65 @@ fn summarize_single_worktree(id: &str, info: &WorktreeInfo) -> WorktreeSummary {
     };
 
     let head_commit = if git_ready {
-        head_commit_info(&info.path)
-            .map(|opt| opt.map(WorktreeCommitPayload::from))
-            .map_err(|err| {
+        match profiler.measure_worktree_result(id, "head_commit", || {
+            head_commit_info(&info.path)
+        }) {
+            Ok(result) => result.map(WorktreeCommitPayload::from),
+            Err(err) => {
                 warn_once("head_commit", &info.path, || {
                     format!(
                         "⚠️  Failed to read last commit for {}: {err}",
                         info.path.display()
                     )
                 });
-                err
-            })
-            .ok()
-            .flatten()
+                None
+            }
+        }
     } else {
         None
     };
 
-    let claude_sessions = if path_exists {
-        get_claude_sessions(&info.path)
+    let commits_ahead = if git_ready {
+        match profiler.measure_worktree_result(id, "commits_since_merge_base", || {
+            commits_since_merge_base(&info.path)
+        }) {
+            Ok(result) => result.map(WorktreeCommitsAheadPayload::from),
+            Err(err) => {
+                warn_once("git_commits_ahead", &info.path, || {
+                    format!(
+                        "⚠️  Failed to read commits relative to base for {}: {err}",
+                        info.path.display()
+                    )
+                });
+                None
+            }
+        }
     } else {
-        Vec::new()
+        None
     };
-    let sessions: Vec<WorktreeSessionSummary> = claude_sessions
-        .into_iter()
-        .map(|session| WorktreeSessionSummary {
-            provider: "claude".to_string(),
-            last_user_message: session.last_user_message,
-            last_timestamp: session.last_timestamp,
-        })
-        .collect();
+
+    let mut sessions: Vec<WorktreeSessionSummary> = Vec::new();
+    if path_exists {
+        sessions.extend(profiler.measure_worktree(id, "sessions.external", || {
+            match_sessions_for_worktree(info, external_sessions)
+        }));
+    }
+    if path_exists {
+        let claude_sessions = profiler.measure_worktree(id, "sessions.claude", || {
+            get_claude_sessions(&info.path)
+        });
+        sessions.extend(claude_sessions.into_iter().map(|session| {
+            WorktreeSessionSummary {
+                provider: "claude".to_string(),
+                session_id: session.id,
+                last_user_message: session.last_user_message,
+                last_timestamp: session.last_timestamp,
+                user_messages: session.user_messages,
+            }
+        }));
+    }
+
+    sessions.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
 
     let mut last_activity = info.created_at;
     if let Some(ref commit) = head_commit {
@@ -389,6 +691,7 @@ fn summarize_single_worktree(id: &str, info: &WorktreeInfo) -> WorktreeSummary {
         agent_alias: info.agent_alias.clone(),
         git_status,
         head_commit,
+        commits_ahead,
         sessions,
     }
 }

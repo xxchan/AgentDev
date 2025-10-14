@@ -1,6 +1,9 @@
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -12,6 +15,28 @@ use super::{SessionProvider, SessionRecord};
 pub struct CodexSessionProvider {
     sessions_dir: Option<PathBuf>,
 }
+
+#[derive(Clone)]
+struct CachedSession {
+    modified: Option<SystemTime>,
+    len: u64,
+    record: SessionRecord,
+}
+
+#[derive(Default)]
+struct SessionCache {
+    entries: HashMap<PathBuf, CachedSession>,
+}
+
+impl SessionCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+}
+
+static CODEX_SESSION_CACHE: OnceLock<Mutex<SessionCache>> = OnceLock::new();
 
 impl CodexSessionProvider {
     pub fn new() -> Self {
@@ -72,7 +97,14 @@ impl CodexSessionProvider {
                                 if record.first_user_message.is_none() {
                                     record.first_user_message = Some(text.clone());
                                 }
-                                record.last_user_message = Some(text);
+                                record.last_user_message = Some(text.clone());
+                                if record
+                                    .user_messages
+                                    .last()
+                                    .map_or(true, |previous| previous != &text)
+                                {
+                                    record.user_messages.push(text);
+                                }
                             }
                         }
                     }
@@ -90,6 +122,13 @@ impl CodexSessionProvider {
                                     record.first_user_message = Some(msg.to_string());
                                 }
                                 record.last_user_message = Some(msg.to_string());
+                                if record
+                                    .user_messages
+                                    .last()
+                                    .map_or(true, |previous| previous != msg)
+                                {
+                                    record.user_messages.push(msg.to_string());
+                                }
                             }
                         }
                     }
@@ -116,7 +155,13 @@ impl SessionProvider for CodexSessionProvider {
             return Ok(Vec::new());
         }
 
-        let mut sessions = Vec::new();
+        let cache_lock = CODEX_SESSION_CACHE.get_or_init(|| Mutex::new(SessionCache::new()));
+        let cache = cache_lock
+            .lock()
+            .expect("codex session cache mutex poisoned");
+
+        let mut seen_paths: HashSet<PathBuf> = HashSet::new();
+        let mut refresh_list: Vec<(PathBuf, Option<SystemTime>, u64)> = Vec::new();
 
         for entry in WalkDir::new(dir)
             .follow_links(false)
@@ -130,11 +175,70 @@ impl SessionProvider for CodexSessionProvider {
                     .and_then(|ext| ext.to_str())
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
             {
-                if let Some(record) = self.parse_session_file(path) {
-                    sessions.push(record);
+                let path_buf = path.to_path_buf();
+                seen_paths.insert(path_buf.clone());
+                let metadata = entry.metadata().ok();
+                let modified = metadata.as_ref().and_then(|meta| meta.modified().ok());
+                let len = metadata.map(|meta| meta.len()).unwrap_or(0);
+
+                let needs_refresh = match cache.entries.get(&path_buf) {
+                    Some(existing) => existing.modified != modified || existing.len != len,
+                    None => true,
+                };
+
+                if needs_refresh {
+                    refresh_list.push((path_buf.clone(), modified, len));
                 }
             }
         }
+
+        let stale_paths: Vec<PathBuf> = cache
+            .entries
+            .keys()
+            .filter(|path| !seen_paths.contains(*path))
+            .cloned()
+            .collect();
+
+        drop(cache);
+
+        let mut refreshed: Vec<(PathBuf, Option<SystemTime>, u64, Option<SessionRecord>)> =
+            Vec::with_capacity(refresh_list.len());
+        for (path_buf, modified, len) in refresh_list {
+            let record = self.parse_session_file(&path_buf);
+            refreshed.push((path_buf, modified, len, record));
+        }
+
+        let mut cache = cache_lock
+            .lock()
+            .expect("codex session cache mutex poisoned");
+
+        for stale in stale_paths {
+            cache.entries.remove(&stale);
+        }
+
+        for (path_buf, modified, len, record_opt) in refreshed {
+            match record_opt {
+                Some(record) => {
+                    cache.entries.insert(
+                        path_buf,
+                        CachedSession {
+                            modified,
+                            len,
+                            record,
+                        },
+                    );
+                }
+                None => {
+                    cache.entries.remove(&path_buf);
+                }
+            }
+        }
+
+        let mut sessions: Vec<SessionRecord> = cache
+            .entries
+            .values()
+            .map(|entry| entry.record.clone())
+            .collect();
 
         sessions.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
         Ok(sessions)

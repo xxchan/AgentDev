@@ -17,6 +17,7 @@ pub struct SessionRecord {
     pub last_user_message: Option<String>,
     pub last_timestamp: Option<DateTime<Utc>>,
     pub file_path: PathBuf,
+    pub user_messages: Vec<String>,
 }
 
 impl SessionRecord {
@@ -37,6 +38,7 @@ impl SessionRecord {
             last_user_message: None,
             last_timestamp: None,
             file_path,
+            user_messages: Vec::new(),
         }
     }
 

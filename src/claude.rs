@@ -5,8 +5,10 @@ use std::path::Path;
 
 #[derive(Debug)]
 pub struct SessionInfo {
+    pub id: String,
     pub last_user_message: String,
     pub last_timestamp: Option<DateTime<Utc>>,
+    pub user_messages: Vec<String>,
 }
 
 pub fn get_claude_sessions(project_path: &Path) -> Vec<SessionInfo> {
@@ -37,14 +39,20 @@ pub fn get_claude_sessions(project_path: &Path) -> Vec<SessionInfo> {
                     .extension()
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
             {
+                let session_id = entry
+                    .path()
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| entry.path().to_string_lossy().to_string());
+
                 // Read session data from the file
                 let mut last_user_message = String::new();
                 let mut last_timestamp = None;
+                let mut user_messages: Vec<String> = Vec::new();
 
                 if let Ok(file) = fs::File::open(entry.path()) {
                     let reader = BufReader::new(file);
-                    let mut user_messages = Vec::new();
-
                     for line in reader.lines().map_while(Result::ok) {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
                             && json.get("type").and_then(|t| t.as_str()) == Some("user")
@@ -85,7 +93,14 @@ pub fn get_claude_sessions(project_path: &Path) -> Vec<SessionInfo> {
                                     && !content.starts_with("Caveat:")
                                     && !content.contains("[Request interrupted")
                                 {
-                                    user_messages.push(content);
+                                    let trimmed = content.trim();
+                                    if !trimmed.is_empty()
+                                        && user_messages
+                                            .last()
+                                            .map_or(true, |previous| previous != trimmed)
+                                    {
+                                        user_messages.push(trimmed.to_string());
+                                    }
                                 }
                             }
                         }
@@ -98,10 +113,12 @@ pub fn get_claude_sessions(project_path: &Path) -> Vec<SessionInfo> {
                 }
 
                 // Only add sessions with user messages
-                if !last_user_message.is_empty() {
+                if !user_messages.is_empty() {
                     sessions.push(SessionInfo {
+                        id: session_id,
                         last_user_message,
                         last_timestamp,
+                        user_messages,
                     });
                 }
             }

@@ -8,15 +8,6 @@ interface WorktreeDetailsProps {
   isLoading: boolean;
 }
 
-type TabKey = 'overview' | 'git' | 'sessions' | 'processes';
-
-const TABS: Array<{ key: TabKey; label: string }> = [
-  { key: 'overview', label: 'Overview' },
-  { key: 'git', label: 'Git' },
-  { key: 'sessions', label: 'Sessions' },
-  { key: 'processes', label: 'Processes' },
-];
-
 function formatTimestamp(value?: string | null) {
   if (!value) {
     return 'unknown';
@@ -25,33 +16,67 @@ function formatTimestamp(value?: string | null) {
   if (Number.isNaN(date.getTime())) {
     return 'unknown';
   }
-  return `${date.toLocaleString()}`;
+  const diffMs = Date.now() - date.getTime();
+  const diffStr = formatRelativeTime(diffMs);
+  return `${date.toLocaleString()} (${diffStr})`;
+}
+
+function formatRelativeTime(diffMs: number) {
+  const diffMinutes = Math.max(Math.floor(diffMs / (1000 * 60)), 0);
+  if (diffMinutes < 1) {
+    return 'just now';
+  }
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`;
+  }
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours}h ago`;
+  }
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) {
+    return `${diffDays}d ago`;
+  }
+  const diffMonths = Math.floor(diffDays / 30);
+  return `${diffMonths}mo ago`;
+}
+
+function formatCommitId(commitId?: string | null) {
+  if (!commitId) {
+    return '';
+  }
+  return commitId.length > 7 ? commitId.slice(0, 7) : commitId;
 }
 
 export default function WorktreeDetails({
   worktree,
   isLoading,
 }: WorktreeDetailsProps) {
-  const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [gitDetails, setGitDetails] = useState<WorktreeGitDetails | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
   const [isGitLoading, setIsGitLoading] = useState(false);
   const [expandedDiffKey, setExpandedDiffKey] = useState<string | null>(null);
+  const [isGitSectionExpanded, setIsGitSectionExpanded] = useState(false);
+  const [expandedSessionMessages, setExpandedSessionMessages] = useState<Record<string, boolean>>(
+    {},
+  );
   const worktreeId = worktree?.id ?? null;
-
-  useEffect(() => {
-    setActiveTab('overview');
-  }, [worktreeId]);
 
   useEffect(() => {
     setGitDetails(null);
     setGitError(null);
     setIsGitLoading(false);
     setExpandedDiffKey(null);
+    setIsGitSectionExpanded(false);
+    setExpandedSessionMessages({});
   }, [worktreeId]);
 
   useEffect(() => {
-    if (activeTab !== 'git' || !worktreeId) {
+    if (!isGitSectionExpanded || !worktreeId) {
+      return;
+    }
+
+    if (gitDetails) {
       return;
     }
 
@@ -99,7 +124,7 @@ export default function WorktreeDetails({
       cancelled = true;
       controller.abort();
     };
-  }, [activeTab, worktreeId]);
+  }, [worktreeId, isGitSectionExpanded, gitDetails]);
 
   useEffect(() => {
     if (!gitDetails || expandedDiffKey) {
@@ -129,6 +154,16 @@ export default function WorktreeDetails({
     }
   }, [gitDetails, expandedDiffKey]);
 
+  const handleGitToggle = () => {
+    setIsGitSectionExpanded((prev) => {
+      const next = !prev;
+      if (!next) {
+        setExpandedDiffKey(null);
+      }
+      return next;
+    });
+  };
+
   if (!worktree) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -151,11 +186,12 @@ export default function WorktreeDetails({
 
   const status = worktree.git_status ?? undefined;
   const commit = worktree.head_commit ?? undefined;
+  const commitsAhead = worktree.commits_ahead ?? undefined;
+  const commitsAheadList = commitsAhead?.commits ?? [];
 
-  const stagedCount = gitDetails?.staged.length ?? 0;
-  const unstagedCount = gitDetails?.unstaged.length ?? 0;
-  const untrackedCount = gitDetails?.untracked.length ?? 0;
-  const totalDiffCount = stagedCount + unstagedCount + untrackedCount;
+  const totalDiffCount = gitDetails
+    ? gitDetails.staged.length + gitDetails.unstaged.length + gitDetails.untracked.length
+    : null;
 
   const overviewCards = [
     {
@@ -190,18 +226,18 @@ export default function WorktreeDetails({
         {overviewCards.map((card) => (
           <div
             key={card.label}
-            className="rounded-lg border border-gray-200 bg-white px-4 py-3"
+            className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
           >
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
               {card.label}
-            </p>
-            <p
-              className={`mt-1 text-sm text-gray-900 ${
+            </span>
+            <span
+              className={`text-sm text-gray-900 ${
                 card.monospace ? 'font-mono break-all' : ''
               }`}
             >
               {card.value}
-            </p>
+            </span>
           </div>
         ))}
       </div>
@@ -221,29 +257,6 @@ export default function WorktreeDetails({
           </pre>
         </section>
       )}
-
-      <section className="rounded-lg border border-gray-200 bg-white px-4 py-4">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
-            Latest Commit
-          </h3>
-          {commit ? (
-            <span className="text-xs text-gray-500">
-              {commit.timestamp ? formatTimestamp(commit.timestamp) : 'Time unknown'}
-            </span>
-          ) : null}
-        </div>
-        {commit ? (
-          <div className="mt-3 space-y-2">
-            <p className="font-mono text-sm text-gray-700">{commit.commit_id}</p>
-            <p className="text-sm text-gray-900">{commit.summary}</p>
-          </div>
-        ) : (
-          <p className="mt-3 text-sm text-gray-500">
-            No commits found yet for this worktree.
-          </p>
-        )}
-      </section>
     </div>
   );
 
@@ -320,8 +333,111 @@ export default function WorktreeDetails({
     );
   };
 
+  const renderCommitStack = () => {
+    const mergeBaseLabel = commitsAhead?.merge_base
+      ? formatCommitId(commitsAhead.merge_base)
+      : 'unknown';
+    const headShort = commit?.commit_id ? formatCommitId(commit.commit_id) : null;
+    const lastCommitTime = commit?.timestamp ? formatTimestamp(commit.timestamp) : null;
+
+    return (
+      <section className="rounded-lg border border-gray-200 bg-white px-4 py-4">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
+          Commits vs {commitsAhead?.base_branch ?? 'default branch'}
+        </h3>
+        {commitsAhead && (
+          <span className="text-xs text-gray-400">
+            {commitsAheadList.length}{' '}
+            {commitsAheadList.length === 1 ? 'commit' : 'commits'}
+          </span>
+        )}
+      </div>
+
+      {commitsAhead ? (
+        <>
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-500">
+            <span>
+              Merge base:{' '}
+              <span
+                className="font-mono text-gray-700"
+                title={commitsAhead.merge_base ?? undefined}
+              >
+                {mergeBaseLabel}
+              </span>
+            </span>
+            {headShort && (
+              <span>
+                HEAD:{' '}
+                <span className="font-mono text-gray-700" title={commit.commit_id}>
+                  {headShort}
+                </span>
+              </span>
+            )}
+            {lastCommitTime && <span>Last update {lastCommitTime}</span>}
+          </div>
+
+          {commitsAheadList.length > 0 ? (
+            <ol className="mt-4 space-y-3">
+              {commitsAheadList.map((entry, index) => (
+                <li
+                  key={entry.commit_id || `${entry.summary}-${index}`}
+                  className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <span
+                      className="font-mono text-sm text-gray-700"
+                      title={entry.commit_id}
+                    >
+                      {formatCommitId(entry.commit_id)}
+                    </span>
+                    <span className="text-xs text-gray-400">
+                      {entry.timestamp ? formatTimestamp(entry.timestamp) : 'unknown'}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-gray-900">
+                    {entry.summary || '(no summary provided)'}
+                  </p>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="mt-4 text-sm text-gray-600">
+              Branch is up to date with {commitsAhead.base_branch}.
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="mt-3 text-sm text-gray-500">
+          Unable to determine default branch comparison. Latest commit details shown below.
+        </p>
+      )}
+
+      {commit ? (
+        <div className="mt-5 rounded-lg border border-dashed border-gray-200 bg-white px-3 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Latest commit
+          </p>
+          <div className="mt-2 space-y-2">
+            <p className="font-mono text-sm text-gray-700 break-all">{commit.commit_id}</p>
+            <p className="text-sm text-gray-900">{commit.summary}</p>
+            <p className="text-xs text-gray-400">
+              {lastCommitTime ?? 'Time unknown'}
+            </p>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-5 text-sm text-gray-500">
+          No commits found yet for this worktree.
+        </p>
+      )}
+    </section>
+    );
+  };
+
   const renderGit = () => (
     <div className="space-y-4">
+      {renderCommitStack()}
       <section className="rounded-lg border border-gray-200 bg-white px-4 py-4">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
@@ -387,86 +503,120 @@ export default function WorktreeDetails({
               Staged, unstaged, and untracked changes pulled directly from git
             </p>
           </div>
-          {totalDiffCount > 0 && (
-            <span className="text-xs text-gray-400">
-              {totalDiffCount} {totalDiffCount === 1 ? 'entry' : 'entries'}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {totalDiffCount !== null && (
+              <span className="text-xs text-gray-400">
+                {totalDiffCount} {totalDiffCount === 1 ? 'entry' : 'entries'}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={handleGitToggle}
+              className="rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+            >
+              {isGitSectionExpanded ? 'Hide details' : 'Show details'}
+            </button>
+          </div>
         </header>
 
         <div className="mt-4 space-y-5">
-          {isGitLoading ? (
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <div className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-200 border-t-blue-500" />
-              <span>Loading diffs from git…</span>
-            </div>
-          ) : gitError ? (
-            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              Failed to load diff details: {gitError}
-            </div>
-          ) : gitDetails ? (
+          {isGitSectionExpanded ? (
             <>
-              {gitDetails.commit_diff && gitDetails.commit_diff.diff.trim() && (
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-700">
-                    Divergence vs {gitDetails.commit_diff.reference}
-                  </p>
-                  <pre className="mt-3 max-h-80 overflow-auto bg-gray-950/95 px-3 py-3 text-xs leading-relaxed text-gray-100">
-                    {gitDetails.commit_diff.diff}
-                  </pre>
+              {isGitLoading ? (
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                  <div className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-200 border-t-blue-500" />
+                  <span>Loading diffs from git…</span>
                 </div>
+              ) : gitError ? (
+                <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  Failed to load diff details: {gitError}
+                </div>
+              ) : gitDetails ? (
+                <>
+                  {gitDetails.commit_diff && gitDetails.commit_diff.diff.trim() && (
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-700">
+                        Divergence vs {gitDetails.commit_diff.reference}
+                      </p>
+                      <pre className="mt-3 max-h-80 overflow-auto bg-gray-950/95 px-3 py-3 text-xs leading-relaxed text-gray-100">
+                        {gitDetails.commit_diff.diff}
+                      </pre>
+                    </div>
+                  )}
+
+                  <div className="space-y-6">
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                        Staged ({gitDetails.staged.length})
+                      </h4>
+                      <div className="mt-2">
+                        {renderDiffGroup(
+                          gitDetails.staged,
+                          'staged',
+                          'No staged changes detected.',
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                        Unstaged ({gitDetails.unstaged.length})
+                      </h4>
+                      <div className="mt-2">
+                        {renderDiffGroup(
+                          gitDetails.unstaged,
+                          'unstaged',
+                          'Working tree matches staged content.',
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                        Untracked ({gitDetails.untracked.length})
+                      </h4>
+                      <div className="mt-2">
+                        {renderDiffGroup(
+                          gitDetails.untracked,
+                          'untracked',
+                          'No new files detected.',
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-gray-500">
+                  Diff details will appear once git metadata loads for this worktree.
+                </p>
               )}
-
-              <div className="space-y-6">
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-                    Staged ({gitDetails.staged.length})
-                  </h4>
-                  <div className="mt-2">
-                    {renderDiffGroup(
-                      gitDetails.staged,
-                      'staged',
-                      'No staged changes detected.',
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-                    Unstaged ({gitDetails.unstaged.length})
-                  </h4>
-                  <div className="mt-2">
-                    {renderDiffGroup(
-                      gitDetails.unstaged,
-                      'unstaged',
-                      'Working tree matches staged content.',
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-                    Untracked ({gitDetails.untracked.length})
-                  </h4>
-                  <div className="mt-2">
-                    {renderDiffGroup(
-                      gitDetails.untracked,
-                      'untracked',
-                      'No new files detected.',
-                    )}
-                  </div>
-                </div>
-              </div>
             </>
           ) : (
-            <p className="text-sm text-gray-500">
-              Diff details will appear once git metadata loads for this worktree.
-            </p>
+            <div className="rounded-md border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+              Expand to inspect staged, unstaged, and untracked diffs.
+            </div>
           )}
         </div>
       </section>
     </div>
   );
+
+  const shouldCollapseMessage = (message: string) => {
+    if (!message) {
+      return false;
+    }
+    if (message.length > 320) {
+      return true;
+    }
+    return message.split(/\r?\n/).length > 8;
+  };
+
+  const toggleSessionMessage = (key: string) => {
+    setExpandedSessionMessages((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
 
   const renderSessions = () => (
     <section className="rounded-lg border border-gray-200 bg-white">
@@ -485,8 +635,11 @@ export default function WorktreeDetails({
       </header>
       {worktree.sessions.length > 0 ? (
         <ul className="divide-y divide-gray-100">
-          {worktree.sessions.map((session, idx) => (
-            <li key={`${session.provider}-${idx}`} className="px-4 py-4 text-sm">
+          {worktree.sessions.map((session) => (
+            <li
+              key={`${session.provider}-${session.session_id}`}
+              className="px-4 py-4 text-sm"
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-blue-700">
@@ -496,6 +649,12 @@ export default function WorktreeDetails({
                     {formatTimestamp(session.last_timestamp)}
                   </span>
                 </div>
+                <span
+                  className="rounded bg-gray-100 px-2 py-0.5 font-mono text-xs text-gray-700"
+                  title={session.session_id}
+                >
+                  {session.session_id}
+                </span>
                 <button
                   type="button"
                   disabled
@@ -505,9 +664,47 @@ export default function WorktreeDetails({
                   Resume (soon)
                 </button>
               </div>
-              <p className="mt-2 text-gray-700">
-                {session.last_user_message || 'No user messages recorded'}
-              </p>
+              {session.user_messages.length > 0 ? (
+                <ol className="mt-3 space-y-2">
+                  {session.user_messages.map((message, messageIdx) => {
+                    const messageKey = `${session.provider}-${session.session_id}-${messageIdx}`;
+                    const isLong = shouldCollapseMessage(message);
+                    const isExpanded = expandedSessionMessages[messageKey] ?? false;
+                    const preview =
+                      isLong && !isExpanded
+                        ? `${message.slice(0, 280).trimEnd()}…`
+                        : message;
+
+                    return (
+                      <li
+                        key={messageKey}
+                        className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2"
+                      >
+                        <div className="flex items-center justify-between text-xs text-gray-500">
+                          <span>User message #{messageIdx + 1}</span>
+                        </div>
+                        <p className="mt-1 whitespace-pre-wrap text-sm text-gray-700">
+                          {preview}
+                        </p>
+                        {isLong && (
+                          <button
+                            type="button"
+                            className="mt-2 text-xs font-medium text-blue-600 hover:underline"
+                            onClick={() => toggleSessionMessage(messageKey)}
+                            aria-expanded={isExpanded}
+                          >
+                            {isExpanded ? 'Show less' : 'Show more'}
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : (
+                <p className="mt-3 text-sm text-gray-500">
+                  No user messages recorded
+                </p>
+              )}
             </li>
           ))}
         </ul>
@@ -531,21 +728,6 @@ export default function WorktreeDetails({
       </p>
     </section>
   );
-
-  const renderActiveTab = () => {
-    switch (activeTab) {
-      case 'overview':
-        return renderOverview();
-      case 'git':
-        return renderGit();
-      case 'sessions':
-        return renderSessions();
-      case 'processes':
-        return renderProcesses();
-      default:
-        return null;
-    }
-  };
 
   return (
     <div className="h-full overflow-y-auto">
@@ -596,27 +778,12 @@ export default function WorktreeDetails({
           </div>
         </section>
 
-        <nav className="flex gap-2 border-b border-gray-200 px-2">
-          {TABS.map((tab) => {
-            const isActive = tab.key === activeTab;
-            return (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => setActiveTab(tab.key)}
-                className={`rounded-t-md px-4 py-2 text-sm font-medium ${
-                  isActive
-                    ? 'bg-white text-blue-600 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="pb-12">{renderActiveTab()}</div>
+        <div className="space-y-6 pb-12">
+          {renderOverview()}
+          {renderGit()}
+          {renderSessions()}
+          {renderProcesses()}
+        </div>
       </div>
     </div>
   );

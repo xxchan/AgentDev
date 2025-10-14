@@ -55,10 +55,18 @@ export interface WorktreeCommitInfo {
   timestamp?: string | null;
 }
 
+export interface WorktreeCommitsAhead {
+  base_branch: string;
+  merge_base?: string | null;
+  commits: WorktreeCommitInfo[];
+}
+
 export interface WorktreeSessionSummary {
   provider: string;
+  session_id: string;
   last_user_message: string;
   last_timestamp?: string | null;
+  user_messages: string[];
 }
 
 export interface WorktreeSummary {
@@ -75,6 +83,7 @@ export interface WorktreeSummary {
   agent_alias?: string | null;
   git_status?: WorktreeGitStatus | null;
   head_commit?: WorktreeCommitInfo | null;
+  commits_ahead?: WorktreeCommitsAhead | null;
   sessions: WorktreeSessionSummary[];
 }
 

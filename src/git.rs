@@ -517,22 +517,47 @@ pub fn update_submodules(worktree_path: &Path) -> Result<()> {
     Ok(())
 }
 
+static DEFAULT_BRANCH_CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+
 fn detect_default_branch_for_repo(repo: &str) -> Option<String> {
-    if let Ok(output) = execute_git(&["-C", repo, "remote", "show", "origin"]) {
-        for line in output.lines() {
-            if let Some(branch) = line.strip_prefix("  HEAD branch: ") {
-                return Some(branch.trim().to_string());
+    if let Some(cache) = DEFAULT_BRANCH_CACHE.get() {
+        if let Ok(cache_guard) = cache.lock() {
+            if let Some(cached) = cache_guard.get(repo) {
+                return cached.clone();
             }
         }
     }
 
-    if let Ok(output) = execute_git(&["-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD"]) {
-        if let Some(branch) = output.strip_prefix("refs/remotes/origin/") {
-            return Some(branch.to_string());
-        }
+    let remote_show_branch = execute_git(&["-C", repo, "remote", "show", "origin"])
+        .ok()
+        .and_then(|output| {
+            output.lines().find_map(|line| {
+                line.strip_prefix("  HEAD branch: ")
+                    .map(|branch| branch.trim().to_string())
+            })
+        });
+
+    if let Some(branch) = remote_show_branch {
+        return store_default_branch(repo, Some(branch));
     }
 
-    None
+    let symbolic_branch = execute_git(&["-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD"])
+        .ok()
+        .and_then(|output| {
+            output
+                .strip_prefix("refs/remotes/origin/")
+                .map(|branch| branch.to_string())
+        });
+
+    store_default_branch(repo, symbolic_branch)
+}
+
+fn store_default_branch(repo: &str, branch: Option<String>) -> Option<String> {
+    let cache = DEFAULT_BRANCH_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(repo.to_string(), branch.clone());
+    }
+    branch
 }
 
 #[derive(Debug, Clone)]
@@ -554,6 +579,24 @@ pub struct HeadCommitInfo {
     pub summary: String,
     pub timestamp: Option<DateTime<Utc>>,
 }
+
+#[derive(Debug, Clone)]
+pub struct CommitsAhead {
+    pub base_branch: String,
+    pub merge_base: Option<String>,
+    pub commits: Vec<HeadCommitInfo>,
+}
+
+#[derive(Clone)]
+struct CommitsAheadCacheEntry {
+    head_oid: String,
+    base_ref: String,
+    base_oid: Option<String>,
+    result: Option<CommitsAhead>,
+}
+
+static COMMITS_AHEAD_CACHE: OnceLock<Mutex<HashMap<PathBuf, CommitsAheadCacheEntry>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct CommitDiffInfo {
@@ -715,6 +758,125 @@ pub fn head_commit_info(path: &Path) -> Result<Option<HeadCommitInfo>> {
         summary,
         timestamp,
     }))
+}
+
+pub fn commits_since_merge_base(path: &Path) -> Result<Option<CommitsAhead>> {
+    let repo = path
+        .to_str()
+        .context("worktree path contains invalid UTF-8")?;
+
+    let default_branch = detect_default_branch_for_repo(repo).unwrap_or_else(|| "main".to_string());
+
+    let candidate_refs = [format!("origin/{default_branch}"), default_branch.clone()];
+
+    let mut comparison_ref = None;
+    for candidate in candidate_refs {
+        if execute_git(&["-C", repo, "rev-parse", "--verify", &candidate]).is_ok() {
+            comparison_ref = Some(candidate);
+            break;
+        }
+    }
+
+    let Some(base_ref) = comparison_ref else {
+        return Ok(None);
+    };
+
+    let head_oid = match execute_git(&["-C", repo, "rev-parse", "HEAD"]) {
+        Ok(output) => output.trim().to_string(),
+        Err(_) => return Ok(None),
+    };
+
+    let base_oid = execute_git(&["-C", repo, "rev-parse", &base_ref])
+        .ok()
+        .map(|value| value.trim().to_string());
+
+    if let Some(cache) = COMMITS_AHEAD_CACHE.get() {
+        if let Ok(cache_guard) = cache.lock() {
+            if let Some(entry) = cache_guard.get(path) {
+                if entry.head_oid == head_oid
+                    && entry.base_ref == base_ref
+                    && entry.base_oid == base_oid
+                {
+                    if std::env::var("AGENTDEV_PROFILE_WORKTREES")
+                        .map(|value| value != "0")
+                        .unwrap_or(false)
+                    {
+                        println!(
+                            "[profile/worktrees] {}::commits_since_merge_base cache hit",
+                            repo
+                        );
+                    }
+                    return Ok(entry.result.clone());
+                }
+            }
+        }
+    }
+
+    let merge_base = execute_git(&["-C", repo, "merge-base", "HEAD", &base_ref])
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let range = if let Some(ref base) = merge_base {
+        format!("{base}..HEAD")
+    } else {
+        format!("{base_ref}..HEAD")
+    };
+
+    let log_output = execute_git(&[
+        "-C",
+        repo,
+        "log",
+        "--pretty=format:%H%x09%ct%x09%s",
+        "--reverse",
+        &range,
+    ])?;
+
+    let mut commits = Vec::new();
+    for line in log_output.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let mut parts = line.splitn(3, '\t');
+        let commit_id = parts.next().unwrap_or_default().trim().to_string();
+        if commit_id.is_empty() {
+            continue;
+        }
+
+        let timestamp = parts
+            .next()
+            .and_then(|part| part.parse::<i64>().ok())
+            .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
+        let summary = parts.next().unwrap_or_default().trim().to_string();
+
+        commits.push(HeadCommitInfo {
+            commit_id,
+            summary,
+            timestamp,
+        });
+    }
+
+    let result = Some(CommitsAhead {
+        base_branch: default_branch,
+        merge_base,
+        commits,
+    });
+
+    let cache = COMMITS_AHEAD_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(
+            path.to_path_buf(),
+            CommitsAheadCacheEntry {
+                head_oid,
+                base_ref: base_ref.clone(),
+                base_oid: base_oid.clone(),
+                result: result.clone(),
+            },
+        );
+    }
+
+    Ok(result)
 }
 
 struct GitNameStatusRecord {
@@ -1089,6 +1251,90 @@ mod tests {
         assert!(
             diff.contains("+line2"),
             "diff did not include committed change: {diff}"
+        );
+    }
+
+    #[test]
+    fn test_commits_since_merge_base_lists_feature_commits() {
+        use std::fs;
+
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let repo_path = temp.path();
+
+        let run_git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(repo_path)
+                .status()
+                .expect("execute git command");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+
+        run_git(&["init", "--initial-branch=main"]);
+        run_git(&["config", "user.email", "test@example.com"]);
+        run_git(&["config", "user.name", "Tester"]);
+
+        fs::write(repo_path.join("note.txt"), "base\n").expect("write base file");
+        run_git(&["add", "note.txt"]);
+        run_git(&["commit", "-m", "initial"]);
+
+        run_git(&["checkout", "-b", "feature"]);
+
+        fs::write(repo_path.join("note.txt"), "base\nfeature-1\n").expect("update file");
+        run_git(&["add", "note.txt"]);
+        run_git(&["commit", "-m", "feature change 1"]);
+
+        fs::write(repo_path.join("note.txt"), "base\nfeature-1\nfeature-2\n")
+            .expect("append second change");
+        run_git(&["add", "note.txt"]);
+        run_git(&["commit", "-m", "feature change 2"]);
+
+        let info = commits_since_merge_base(repo_path)
+            .expect("compute commits ahead")
+            .expect("expected comparison data");
+
+        assert_eq!(info.base_branch, "main");
+        assert!(info.merge_base.is_some());
+        assert_eq!(info.commits.len(), 2);
+        assert_eq!(info.commits[0].summary, "feature change 1");
+        assert_eq!(info.commits[1].summary, "feature change 2");
+        assert!(info.commits[0].commit_id.len() >= 7);
+    }
+
+    #[test]
+    fn test_commits_since_merge_base_on_default_branch_is_empty() {
+        use std::fs;
+
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let repo_path = temp.path();
+
+        let run_git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(repo_path)
+                .status()
+                .expect("execute git command");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+
+        run_git(&["init", "--initial-branch=main"]);
+        run_git(&["config", "user.email", "test@example.com"]);
+        run_git(&["config", "user.name", "Tester"]);
+
+        fs::write(repo_path.join("note.txt"), "base\n").expect("write base file");
+        run_git(&["add", "note.txt"]);
+        run_git(&["commit", "-m", "initial"]);
+
+        let info = commits_since_merge_base(repo_path)
+            .expect("compute commits ahead")
+            .expect("expected comparison data");
+
+        assert_eq!(info.base_branch, "main");
+        assert!(info.merge_base.is_some());
+        assert!(
+            info.commits.is_empty(),
+            "expected no commits ahead but found {:?}",
+            info.commits
         );
     }
 }
