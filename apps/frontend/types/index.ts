@@ -131,3 +131,7 @@ export interface WorktreeProcessSummary {
 export interface WorktreeProcessListResponse {
   processes: WorktreeProcessSummary[];
 }
+
+export interface LaunchWorktreeCommandResponse {
+  process: WorktreeProcessSummary;
+}

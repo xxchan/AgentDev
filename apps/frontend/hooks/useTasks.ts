@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Task, CreateTaskRequest, CreateTaskResponse } from '@/types';
+import { apiUrl } from '@/lib/api';
 
 export function useTasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -14,7 +15,7 @@ export function useTasks() {
     setError(null);
     
     try {
-      const response = await fetch('/api/tasks');
+      const response = await fetch(apiUrl('/api/tasks'));
       if (!response.ok) {
         throw new Error(`Failed to fetch tasks: ${response.statusText}`);
       }
@@ -35,7 +36,7 @@ export function useTasks() {
     setError(null);
     
     try {
-      const response = await fetch('/api/tasks', {
+      const response = await fetch(apiUrl('/api/tasks'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -66,7 +67,7 @@ export function useTasks() {
     setError(null);
     
     try {
-      const response = await fetch(`/api/tasks/${taskId}`, {
+      const response = await fetch(apiUrl(`/api/tasks/${taskId}`), {
         method: 'DELETE',
       });
       

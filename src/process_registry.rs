@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::state::{XlaudeState, get_config_dir};
 
 const REGISTRY_FILENAME: &str = "processes.json";
+pub const MAX_PROCESSES_PER_WORKTREE: usize = 25;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

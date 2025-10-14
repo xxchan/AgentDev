@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { WorktreeListResponse, WorktreeSummary } from '@/types';
+import { apiUrl } from '@/lib/api';
 
 export function useWorktrees() {
   const [worktrees, setWorktrees] = useState<WorktreeSummary[]>([]);
@@ -13,7 +14,7 @@ export function useWorktrees() {
     setError(null);
 
     try {
-      const response = await fetch('/api/worktrees');
+      const response = await fetch(apiUrl('/api/worktrees'));
       if (!response.ok) {
         throw new Error(`Failed to fetch worktrees: ${response.statusText}`);
       }

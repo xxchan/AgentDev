@@ -7,6 +7,7 @@ import {
   WorktreeGitDetails,
   WorktreeGitStatus,
 } from '@/types';
+import { apiUrl } from '@/lib/api';
 
 interface WorktreeGitSectionProps {
   worktreeId: string | null;
@@ -63,7 +64,7 @@ export default function WorktreeGitSection({
 
       try {
         const response = await fetch(
-          `/api/worktrees/${encodeURIComponent(currentWorktreeId)}/git`,
+          apiUrl(`/api/worktrees/${encodeURIComponent(currentWorktreeId)}/git`),
           { signal: controller.signal },
         );
         if (!response.ok) {

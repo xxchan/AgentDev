@@ -5,12 +5,12 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
-use agentdev::process_registry::{ProcessRecord, ProcessRegistry, ProcessStatus};
+use agentdev::process_registry::{
+    MAX_PROCESSES_PER_WORKTREE, ProcessRecord, ProcessRegistry, ProcessStatus,
+};
 
 use crate::input::smart_select;
 use crate::state::{WorktreeInfo, XlaudeState};
-
-const MAX_PROCESSES_PER_WORKTREE: usize = 25;
 
 /// Execute an arbitrary command inside a managed worktree.
 pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> Result<()> {

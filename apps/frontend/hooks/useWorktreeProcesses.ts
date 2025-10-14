@@ -5,6 +5,7 @@ import {
   WorktreeProcessListResponse,
   WorktreeProcessSummary,
 } from '@/types';
+import { apiUrl } from '@/lib/api';
 
 interface UseWorktreeProcessesOptions {
   pollIntervalMs?: number;
@@ -46,7 +47,7 @@ export function useWorktreeProcesses(
     setError(null);
 
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetch(apiUrl(endpoint), {
         signal: controller.signal,
       });
 

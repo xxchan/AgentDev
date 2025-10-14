@@ -9,8 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
+use std::thread;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -23,7 +25,13 @@ use agentdev::{
         get_repo_name, head_commit_info, summarize_worktree_status, update_submodules,
         CommitsAhead, HeadCommitInfo, WorktreeGitStatus,
     },
-    process_registry::{ProcessRegistry, ProcessStatus as RegistryProcessStatus},
+    process_registry::{
+        canonicalize_cwd,
+        ProcessRecord,
+        ProcessRegistry,
+        ProcessStatus as RegistryProcessStatus,
+        MAX_PROCESSES_PER_WORKTREE,
+    },
     sessions::{canonicalize as canonicalize_session_path, default_providers, SessionRecord},
     state::{WorktreeInfo, XlaudeState},
     tmux::TmuxManager,
@@ -150,6 +158,18 @@ pub struct WorktreeProcessSummary {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorktreeProcessListResponse {
     pub processes: Vec<WorktreeProcessSummary>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct LaunchWorktreeCommandRequest {
+    pub command: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct LaunchWorktreeCommandResponse {
+    pub process: WorktreeProcessSummary,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -502,6 +522,38 @@ pub async fn get_worktree_processes(AxumPath(worktree_id): AxumPath<String>) -> 
     }
 }
 
+pub async fn post_worktree_command(
+    AxumPath(worktree_id): AxumPath<String>,
+    Json(payload): Json<LaunchWorktreeCommandRequest>,
+) -> impl IntoResponse {
+    let id_for_error = worktree_id.clone();
+    match tokio::task::spawn_blocking(move || launch_worktree_command(worktree_id, payload)).await {
+        Ok(Ok(LaunchCommandResult::Success(process))) => (
+            StatusCode::CREATED,
+            Json(LaunchWorktreeCommandResponse { process }),
+        )
+            .into_response(),
+        Ok(Ok(LaunchCommandResult::NotFound)) => (
+            StatusCode::NOT_FOUND,
+            format!("Worktree {id_for_error} not found"),
+        )
+            .into_response(),
+        Ok(Ok(LaunchCommandResult::Invalid(message))) => {
+            (StatusCode::BAD_REQUEST, message).into_response()
+        }
+        Ok(Err(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to launch command: {err}"),
+        )
+            .into_response(),
+        Err(join_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Command launch task failed: {join_err}"),
+        )
+            .into_response(),
+    }
+}
+
 fn collect_worktree_summaries() -> Result<WorktreeListResponse> {
     let profiler = WorktreeProfiler::new();
     let overall_start = if profiler.enabled() {
@@ -569,26 +621,195 @@ fn collect_worktree_processes(worktree_id: &str) -> Result<Option<WorktreeProces
     let processes = registry
         .processes_for_worktree(worktree_id)
         .into_iter()
-        .map(|record| WorktreeProcessSummary {
-            id: record.id.clone(),
-            command: record.command.clone(),
-            status: WorktreeProcessStatus::from(record.status.clone()),
-            started_at: Some(record.started_at),
-            finished_at: record.finished_at,
-            exit_code: record.exit_code,
-            cwd: record
-                .cwd
-                .as_ref()
-                .map(|path| path.display().to_string()),
-            description: record
-                .description
-                .clone()
-                .or_else(|| record.error.clone()),
-        })
+        .map(process_record_to_summary)
         .collect();
 
     Ok(Some(WorktreeProcessListResponse { processes }))
 }
+
+enum LaunchCommandResult {
+    Success(WorktreeProcessSummary),
+    NotFound,
+    Invalid(String),
+}
+
+fn launch_worktree_command(
+    worktree_id: String,
+    request: LaunchWorktreeCommandRequest,
+) -> Result<LaunchCommandResult> {
+    let trimmed = request.command.trim();
+    if trimmed.is_empty() {
+        return Ok(LaunchCommandResult::Invalid(
+            "Command is required".to_string(),
+        ));
+    }
+
+    let command_tokens = match shell_words::split(trimmed) {
+        Ok(tokens) if !tokens.is_empty() => tokens,
+        Ok(_) => {
+            return Ok(LaunchCommandResult::Invalid(
+                "Command is required".to_string(),
+            ))
+        }
+        Err(err) => {
+            return Ok(LaunchCommandResult::Invalid(format!(
+                "Invalid command string: {err}"
+            )))
+        }
+    };
+
+    let state = XlaudeState::load()?;
+    let Some(info) = state.worktrees.get(&worktree_id) else {
+        return Ok(LaunchCommandResult::NotFound);
+    };
+
+    let mut registry = ProcessRegistry::load()?;
+    let mut record = ProcessRecord::new(
+        worktree_id.clone(),
+        info.name.clone(),
+        info.repo_name.clone(),
+        command_tokens.clone(),
+        Some(info.path.clone()),
+        RegistryProcessStatus::Pending,
+    );
+
+    let default_description = "Launched from AgentDev dashboard".to_string();
+    record.description = request
+        .description
+        .and_then(|value| {
+            let trimmed_desc = value.trim();
+            if trimmed_desc.is_empty() {
+                None
+            } else {
+                Some(trimmed_desc.to_string())
+            }
+        })
+        .or(Some(default_description));
+
+    let process_id = record.id.clone();
+    registry.insert(record.clone());
+    registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+    registry.save()?;
+
+    let worktree_path = info.path.clone();
+    spawn_command_runner(
+        worktree_id,
+        process_id.clone(),
+        command_tokens,
+        worktree_path,
+    );
+
+    Ok(LaunchCommandResult::Success(process_record_to_summary(&record)))
+}
+
+fn spawn_command_runner(
+    worktree_id: String,
+    process_id: String,
+    command_tokens: Vec<String>,
+    worktree_path: PathBuf,
+) {
+    thread::spawn(move || {
+        if let Err(err) = run_command_runner(
+            &worktree_id,
+            &process_id,
+            &command_tokens,
+            &worktree_path,
+        ) {
+            eprintln!(
+                "Failed to execute command for worktree {}: {err}",
+                worktree_id
+            );
+        }
+    });
+}
+
+fn run_command_runner(
+    _worktree_id: &str,
+    process_id: &str,
+    command_tokens: &[String],
+    worktree_path: &Path,
+) -> Result<()> {
+    let (program, args) = command_tokens
+        .split_first()
+        .ok_or_else(|| anyhow!("Command tokens unexpectedly empty"))?;
+
+    {
+        let mut registry = ProcessRegistry::load()?;
+        registry.update(process_id, |record| {
+            record.mark_running();
+            record.cwd = Some(canonicalize_cwd(worktree_path));
+            record.error = None;
+        })?;
+        registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+        registry.save()?;
+    }
+
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(worktree_path)
+        .status();
+
+    match status {
+        Ok(exit) => {
+            let outcome = if exit.success() {
+                RegistryProcessStatus::Succeeded
+            } else {
+                RegistryProcessStatus::Failed
+            };
+            {
+                let mut registry = ProcessRegistry::load()?;
+                registry.update(process_id, |record| {
+                    record.mark_finished(outcome, exit.code(), None);
+                })?;
+                registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+                registry.save()?;
+            }
+
+            if !exit.success() {
+                if let Some(code) = exit.code() {
+                    return Err(anyhow!("Command exited with status {code}"));
+                }
+                return Err(anyhow!("Command terminated by signal"));
+            }
+        }
+        Err(err) => {
+            let mut registry = ProcessRegistry::load()?;
+            let error_message = format!("Failed to spawn '{program}': {err}");
+            registry.update(process_id, |record| {
+                record.mark_finished(
+                    RegistryProcessStatus::Failed,
+                    None,
+                    Some(error_message.clone()),
+                );
+            })?;
+            registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+            registry.save()?;
+            return Err(anyhow!(error_message));
+        }
+    }
+
+    Ok(())
+}
+
+fn process_record_to_summary(record: &ProcessRecord) -> WorktreeProcessSummary {
+    WorktreeProcessSummary {
+        id: record.id.clone(),
+        command: record.command.clone(),
+        status: WorktreeProcessStatus::from(record.status),
+        started_at: Some(record.started_at),
+        finished_at: record.finished_at,
+        exit_code: record.exit_code,
+        cwd: record
+            .cwd
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        description: record
+            .description
+            .clone()
+            .or_else(|| record.error.clone()),
+    }
+}
+
 
 impl From<agentdev::git::GitFileDiff> for WorktreeFileDiffPayload {
     fn from(value: agentdev::git::GitFileDiff) -> Self {

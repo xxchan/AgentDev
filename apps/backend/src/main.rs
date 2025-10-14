@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Response},
-    routing::{delete, get},
+    routing::{delete, get, post},
     Router,
 };
 use rust_embed::RustEmbed;
@@ -57,6 +57,10 @@ async fn main() -> Result<()> {
         .route(
             "/api/worktrees/:worktree_id/processes",
             get(get_worktree_processes),
+        )
+        .route(
+            "/api/worktrees/:worktree_id/commands",
+            post(post_worktree_command),
         )
         .route("/api/tasks", get(get_tasks).post(create_task))
         .route("/api/tasks/:task_id", delete(delete_task))

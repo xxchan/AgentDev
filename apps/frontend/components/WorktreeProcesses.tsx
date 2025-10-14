@@ -1,11 +1,19 @@
 'use client';
 
-import { useMemo } from 'react';
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { useWorktreeProcesses } from '@/hooks/useWorktreeProcesses';
 import {
+  LaunchWorktreeCommandResponse,
   WorktreeProcessStatus,
   WorktreeProcessSummary,
 } from '@/types';
+import { apiUrl } from '@/lib/api';
 
 interface WorktreeProcessesProps {
   worktreeId: string | null;
@@ -161,6 +169,125 @@ export default function WorktreeProcesses({
   worktreeName,
 }: WorktreeProcessesProps) {
   const { processes, isLoading, error, refetch } = useWorktreeProcesses(worktreeId);
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [commandInput, setCommandInput] = useState('');
+  const [descriptionInput, setDescriptionInput] = useState('');
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [optimisticProcesses, setOptimisticProcesses] = useState<WorktreeProcessSummary[]>([]);
+
+  useEffect(() => {
+    setOptimisticProcesses([]);
+    setIsFormOpen(false);
+    setCommandInput('');
+    setDescriptionInput('');
+    setLaunchError(null);
+  }, [worktreeId]);
+
+  useEffect(() => {
+    if (processes.length === 0) {
+      return;
+    }
+    setOptimisticProcesses((current) =>
+      current.filter((optimistic) => !processes.some((actual) => actual.id === optimistic.id)),
+    );
+  }, [processes]);
+
+  const commandEndpoint = useMemo(() => {
+    if (!worktreeId) {
+      return null;
+    }
+    const encoded = encodeURIComponent(worktreeId);
+    return `/api/worktrees/${encoded}/commands`;
+  }, [worktreeId]);
+
+  const handleLaunch = useCallback(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!commandEndpoint) {
+      return;
+    }
+
+    const trimmedCommand = commandInput.trim();
+    if (!trimmedCommand) {
+      setLaunchError('Command is required');
+      return;
+    }
+
+    const trimmedDescription = descriptionInput.trim();
+
+    setIsSubmitting(true);
+    setLaunchError(null);
+
+    try {
+      const response = await fetch(apiUrl(commandEndpoint), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command: trimmedCommand,
+          description: trimmedDescription ? trimmedDescription : undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `Failed to launch command (status ${response.status})`);
+      }
+
+      const payload: LaunchWorktreeCommandResponse = await response.json();
+      setOptimisticProcesses((current) => {
+        const withoutDuplicate = current.filter((entry) => entry.id !== payload.process.id);
+        return [payload.process, ...withoutDuplicate];
+      });
+
+      setCommandInput('');
+      setDescriptionInput('');
+      setIsFormOpen(false);
+      void refetch();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to launch command';
+      setLaunchError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [commandEndpoint, commandInput, descriptionInput, refetch]);
+
+  const handleCancelLaunch = useCallback(() => {
+    setIsFormOpen(false);
+    setLaunchError(null);
+  }, []);
+
+  const handleToggleForm = useCallback(() => {
+    setIsFormOpen((prev) => !prev);
+    setLaunchError(null);
+  }, []);
+
+  const displayProcesses = useMemo(() => {
+    const merged = [...optimisticProcesses, ...processes];
+    const seen = new Set<string>();
+    const unique = merged.filter((process) => {
+      if (seen.has(process.id)) {
+        return false;
+      }
+      seen.add(process.id);
+      return true;
+    });
+
+    const extractTimestamp = (process: WorktreeProcessSummary) => {
+      const candidate = process.started_at ?? process.finished_at ?? null;
+      if (!candidate) {
+        return 0;
+      }
+      const epoch = new Date(candidate).getTime();
+      return Number.isNaN(epoch) ? 0 : epoch;
+    };
+
+    return unique.sort((a, b) => extractTimestamp(b) - extractTimestamp(a));
+  }, [optimisticProcesses, processes]);
+
+  const showLoadingState = isLoading && displayProcesses.length === 0;
+  const showEmptyState = !isLoading && displayProcesses.length === 0;
 
   if (!worktreeId) {
     return (
@@ -190,63 +317,116 @@ export default function WorktreeProcesses({
     );
   }
 
-  if (isLoading && processes.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center px-6">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <div className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-primary" />
-          <span>Loading processes…</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (processes.length === 0) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
-        <div>
-          <p className="font-medium text-foreground">
-            No active commands for {worktreeName ?? 'this worktree'}
-          </p>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Launch a command with <code className="rounded bg-muted px-1 py-0.5">agentdev worktree exec</code> and it will appear here with live status updates.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => refetch()}
-          className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted"
-          disabled={isLoading}
-        >
-          Refresh
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto px-6 py-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold text-foreground">Commands for {worktreeName ?? 'selected worktree'}</h3>
+          <h3 className="text-sm font-semibold text-foreground">
+            Commands for {worktreeName ?? 'selected worktree'}
+          </h3>
           <p className="text-xs text-muted-foreground">
-            Refreshes automatically every 5 seconds. Use the refresh button to pull the latest state on demand.
+            Launch commands directly from the dashboard. Data refreshes automatically every 5 seconds.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => refetch()}
-          className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleToggleForm}
+            className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+            disabled={commandEndpoint == null}
+          >
+            {isFormOpen ? 'Hide form' : 'Run command'}
+          </button>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+            disabled={isLoading}
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
-      <div className="space-y-3">
-        {processes.map((process) => (
-          <ProcessCard key={process.id} process={process} />
-        ))}
-      </div>
+      {isFormOpen && (
+        <form
+          onSubmit={handleLaunch}
+          className="flex flex-col gap-3 rounded-md border border-dashed border-border bg-muted/40 p-4"
+        >
+          <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">
+            Command
+            <input
+              type="text"
+              value={commandInput}
+              onChange={(event) => setCommandInput(event.target.value)}
+              placeholder="pnpm dev"
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              autoFocus
+            />
+          </label>
+          <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">
+            Description (optional)
+            <input
+              type="text"
+              value={descriptionInput}
+              onChange={(event) => setDescriptionInput(event.target.value)}
+              placeholder="Launched from dashboard"
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </label>
+          {launchError && (
+            <p className="text-xs text-red-600">{launchError}</p>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              className="rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground shadow-sm disabled:opacity-60"
+              disabled={isSubmitting || commandInput.trim().length === 0}
+            >
+              {isSubmitting ? 'Launching…' : 'Launch'}
+            </button>
+            <button
+              type="button"
+              onClick={handleCancelLaunch}
+              className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+              disabled={isSubmitting}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      {showLoadingState && (
+        <div className="flex flex-1 items-center justify-center px-6">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-primary" />
+            <span>Loading processes…</span>
+          </div>
+        </div>
+      )}
+
+      {showEmptyState && !showLoadingState && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
+          <div>
+            <p className="font-medium text-foreground">
+              No commands recorded for {worktreeName ?? 'this worktree'} yet
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Launch a command here or run{' '}
+              <code className="rounded bg-muted px-1 py-0.5">agentdev worktree exec</code> in the terminal to see it listed.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {!showEmptyState && !showLoadingState && displayProcesses.length > 0 && (
+        <div className="space-y-3 pb-4">
+          {displayProcesses.map((process) => (
+            <ProcessCard key={process.id} process={process} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
