@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -196,6 +197,19 @@ impl ProcessRegistry {
             }
         }
     }
+
+    pub fn mutate<F>(mutator: F) -> Result<()>
+    where
+        F: FnOnce(&mut ProcessRegistry) -> Result<()>,
+    {
+        let _guard = registry_lock()
+            .lock()
+            .expect("Process registry lock poisoned");
+        let mut registry = Self::load()?;
+        mutator(&mut registry)?;
+        registry.save()?;
+        Ok(())
+    }
 }
 
 fn registry_path() -> Result<PathBuf> {
@@ -205,4 +219,9 @@ fn registry_path() -> Result<PathBuf> {
 
 pub fn canonicalize_cwd(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn registry_lock() -> &'static Mutex<()> {
+    static REGISTRY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    REGISTRY_LOCK.get_or_init(|| Mutex::new(()))
 }

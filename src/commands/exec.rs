@@ -56,7 +56,6 @@ pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> 
         .split_first()
         .context("Command tokens unexpectedly empty")?;
 
-    let mut registry = ProcessRegistry::load()?;
     let worktree_key = XlaudeState::make_key(&worktree.repo_name, &worktree.name);
     let mut record = ProcessRecord::new(
         worktree_key,
@@ -68,11 +67,13 @@ pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> 
     );
     record.description = Some("Launched via agentdev worktree exec".to_string());
     let process_id = record.id.clone();
-    registry.insert(record);
-    registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
-    registry
-        .save()
-        .context("Failed to persist process registry after launch")?;
+    let record_to_store = record.clone();
+    ProcessRegistry::mutate(move |registry| {
+        registry.insert(record_to_store);
+        registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+        Ok(())
+    })
+    .context("Failed to persist process registry after launch")?;
 
     let status = Command::new(program)
         .args(args)
@@ -107,19 +108,20 @@ pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> 
             } else {
                 ProcessStatus::Failed
             };
-            registry.update(&process_id, |record| {
-                record.mark_finished(
-                    outcome,
-                    output.status.code(),
-                    None,
-                    stdout_option.clone(),
-                    stderr_option.clone(),
-                );
-            })?;
-            registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
-            registry
-                .save()
-                .context("Failed to persist process registry after completion")?;
+            ProcessRegistry::mutate(|registry| {
+                registry.update(&process_id, |record| {
+                    record.mark_finished(
+                        outcome,
+                        output.status.code(),
+                        None,
+                        stdout_option.clone(),
+                        stderr_option.clone(),
+                    );
+                })?;
+                registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+                Ok(())
+            })
+            .context("Failed to persist process registry after completion")?;
 
             if !output.status.success() {
                 if let Some(code) = output.status.code() {
@@ -132,19 +134,20 @@ pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> 
         }
         Err(err) => {
             let error_message = format!("Failed to spawn '{program}': {err}");
-            registry.update(&process_id, |record| {
-                record.mark_finished(
-                    ProcessStatus::Failed,
-                    None,
-                    Some(error_message.clone()),
-                    None,
-                    None,
-                );
-            })?;
-            registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
-            registry
-                .save()
-                .context("Failed to persist process registry after spawn error")?;
+            ProcessRegistry::mutate(|registry| {
+                registry.update(&process_id, |record| {
+                    record.mark_finished(
+                        ProcessStatus::Failed,
+                        None,
+                        Some(error_message.clone()),
+                        None,
+                        None,
+                    );
+                })?;
+                registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+                Ok(())
+            })
+            .context("Failed to persist process registry after spawn error")?;
             Err(err).with_context(|| format!("Failed to spawn '{program}'"))
         }
     }

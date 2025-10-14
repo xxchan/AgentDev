@@ -691,9 +691,12 @@ fn launch_worktree_command(
         .or(Some(default_description));
 
     let process_id = record.id.clone();
-    registry.insert(record.clone());
-    registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
-    registry.save()?;
+    let record_to_store = record.clone();
+    ProcessRegistry::mutate(move |registry| {
+        registry.insert(record_to_store);
+        registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+        Ok(())
+    })?;
 
     let worktree_path = info.path.clone();
     spawn_command_runner(
@@ -737,16 +740,15 @@ fn run_command_runner(
         .split_first()
         .ok_or_else(|| anyhow!("Command tokens unexpectedly empty"))?;
 
-    {
-        let mut registry = ProcessRegistry::load()?;
+    ProcessRegistry::mutate(|registry| {
         registry.update(process_id, |record| {
             record.mark_running();
             record.cwd = Some(canonicalize_cwd(worktree_path));
             record.error = None;
         })?;
         registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
-        registry.save()?;
-    }
+        Ok(())
+    })?;
 
     let status = Command::new(program)
         .args(args)
@@ -781,8 +783,7 @@ fn run_command_runner(
             } else {
                 RegistryProcessStatus::Failed
             };
-            {
-                let mut registry = ProcessRegistry::load()?;
+            ProcessRegistry::mutate(|registry| {
                 registry.update(process_id, |record| {
                     record.mark_finished(
                         outcome,
@@ -793,8 +794,8 @@ fn run_command_runner(
                     );
                 })?;
                 registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
-                registry.save()?;
-            }
+                Ok(())
+            })?;
 
             if !output.status.success() {
                 if let Some(code) = output.status.code() {
@@ -804,19 +805,20 @@ fn run_command_runner(
             }
         }
         Err(err) => {
-            let mut registry = ProcessRegistry::load()?;
             let error_message = format!("Failed to spawn '{program}': {err}");
-            registry.update(process_id, |record| {
-                record.mark_finished(
-                    RegistryProcessStatus::Failed,
-                    None,
-                    Some(error_message.clone()),
-                    None,
-                    None,
-                );
+            ProcessRegistry::mutate(|registry| {
+                registry.update(process_id, |record| {
+                    record.mark_finished(
+                        RegistryProcessStatus::Failed,
+                        None,
+                        Some(error_message.clone()),
+                        None,
+                        None,
+                    );
+                })?;
+                registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+                Ok(())
             })?;
-            registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
-            registry.save()?;
             return Err(anyhow!(error_message));
         }
     }
