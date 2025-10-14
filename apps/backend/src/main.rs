@@ -50,6 +50,10 @@ async fn main() -> Result<()> {
         // API routes
         .route("/api/worktrees", get(get_worktrees))
         .route("/api/worktrees/:worktree_id", get(get_worktree))
+        .route(
+            "/api/worktrees/:worktree_id/git",
+            get(get_worktree_git_details),
+        )
         .route("/api/tasks", get(get_tasks).post(create_task))
         .route("/api/tasks/:task_id", delete(delete_task))
         .route(

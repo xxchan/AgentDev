@@ -18,8 +18,9 @@ use agentdev::{
     claude::get_claude_sessions,
     config::{load_agent_config, split_cmdline},
     git::{
-        execute_git, get_diff_for_path, get_repo_name, head_commit_info,
-        summarize_worktree_status, update_submodules, HeadCommitInfo, WorktreeGitStatus,
+        collect_worktree_diff_breakdown, execute_git, get_diff_for_path, get_repo_name,
+        head_commit_info, summarize_worktree_status, update_submodules, HeadCommitInfo,
+        WorktreeGitStatus,
     },
     state::{WorktreeInfo, XlaudeState},
     tmux::TmuxManager,
@@ -113,6 +114,28 @@ pub struct WorktreeSummary {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct WorktreeListResponse {
     pub worktrees: Vec<WorktreeSummary>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct WorktreeCommitDiffPayload {
+    pub reference: String,
+    pub diff: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct WorktreeFileDiffPayload {
+    pub path: String,
+    pub display_path: String,
+    pub status: String,
+    pub diff: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct WorktreeGitDetailsPayload {
+    pub commit_diff: Option<WorktreeCommitDiffPayload>,
+    pub staged: Vec<WorktreeFileDiffPayload>,
+    pub unstaged: Vec<WorktreeFileDiffPayload>,
+    pub untracked: Vec<WorktreeFileDiffPayload>,
 }
 
 impl From<WorktreeGitStatus> for WorktreeGitStatusPayload {
@@ -238,6 +261,26 @@ fn collect_worktree_summaries() -> Result<WorktreeListResponse> {
     })
 }
 
+impl From<agentdev::git::GitFileDiff> for WorktreeFileDiffPayload {
+    fn from(value: agentdev::git::GitFileDiff) -> Self {
+        Self {
+            path: value.path,
+            display_path: value.display_path,
+            status: value.status,
+            diff: value.diff,
+        }
+    }
+}
+
+impl From<agentdev::git::CommitDiffInfo> for WorktreeCommitDiffPayload {
+    fn from(value: agentdev::git::CommitDiffInfo) -> Self {
+        Self {
+            reference: value.reference,
+            diff: value.diff,
+        }
+    }
+}
+
 fn collect_worktree_summary(id: String) -> Result<Option<WorktreeSummary>> {
     let state = XlaudeState::load()?;
     Ok(state
@@ -348,6 +391,83 @@ fn summarize_single_worktree(id: &str, info: &WorktreeInfo) -> WorktreeSummary {
         head_commit,
         sessions,
     }
+}
+
+/// GET /api/worktrees/:id/git - Detailed git diff breakdown for a worktree
+pub async fn get_worktree_git_details(
+    AxumPath(worktree_id): AxumPath<String>,
+) -> impl IntoResponse {
+    let id_for_error = worktree_id.clone();
+    match tokio::task::spawn_blocking(move || collect_worktree_git_details(worktree_id)).await {
+        Ok(Ok(Some(details))) => Json(details).into_response(),
+        Ok(Ok(None)) => (
+            StatusCode::NOT_FOUND,
+            format!("Worktree {id_for_error} not found"),
+        )
+            .into_response(),
+        Ok(Err(err)) => {
+            let message = err.to_string();
+            let status = if message.contains("Worktree path missing")
+                || message.contains("Worktree missing git metadata")
+            {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (
+                status,
+                format!("Failed to load git details for {id_for_error}: {message}"),
+            )
+                .into_response()
+        }
+        Err(join_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Git detail task failed: {join_err}"),
+        )
+            .into_response(),
+    }
+}
+
+fn collect_worktree_git_details(
+    id: String,
+) -> Result<Option<WorktreeGitDetailsPayload>> {
+    let state = XlaudeState::load()?;
+    let Some(info) = state.worktrees.get(&id) else {
+        return Ok(None);
+    };
+
+    if !info.path.exists() {
+        anyhow::bail!("Worktree path missing: {}", info.path.display());
+    }
+    if !git_metadata_present(&info.path) {
+        anyhow::bail!(
+            "Worktree missing git metadata: {}",
+            info.path.display()
+        );
+    }
+
+    let breakdown = collect_worktree_diff_breakdown(&info.path)?;
+
+    let payload = WorktreeGitDetailsPayload {
+        commit_diff: breakdown.commit.map(WorktreeCommitDiffPayload::from),
+        staged: breakdown
+            .staged
+            .into_iter()
+            .map(WorktreeFileDiffPayload::from)
+            .collect(),
+        unstaged: breakdown
+            .unstaged
+            .into_iter()
+            .map(WorktreeFileDiffPayload::from)
+            .collect(),
+        untracked: breakdown
+            .untracked
+            .into_iter()
+            .map(WorktreeFileDiffPayload::from)
+            .collect(),
+    };
+
+    Ok(Some(payload))
 }
 
 /// GET /api/tasks - Get all tasks

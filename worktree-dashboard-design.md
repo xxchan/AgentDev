@@ -26,7 +26,7 @@
   - Filters: Active (default), Idle/Archived (collapsed section).
 - **Main Panel – Tabs per Worktree**
   - **Overview:** Quick summary (prompt, manual notes, latest commit message, default agent alias). Quick actions (`Open shell`, `Run command`, `Merge`, `Delete`, `Mark archived`).
-  - **Diff:** Two columns (“Staged”, “Unstaged/Untracked”) with per-file list; toggle to include last N commits. Needs inline file preview.
+- **Diff:** Two columns (“Staged”, “Unstaged/Untracked”) with per-file list; toggle to include last N commits. Needs inline file preview.
   - **Sessions:** Cards listing conversations found under `.agentdev`, `.claude`, `.codex`, etc. Each shows created time, last user message, optional model-generated summary. Buttons for `Resume` or `Open in terminal`.
   - **Processes:** Real-time logs of commands launched from the dashboard (e.g. `pnpm dev`). Show start time, status, controls to stop/restart, and attach to tmux if necessary.
 
@@ -38,6 +38,7 @@
   - `POST /api/worktrees/{id}/commands`: launch a command (`agentdev x exec`, `pnpm dev`, etc.), returning command id for log streaming.
   - `GET /api/worktrees/{id}/sessions`: list session metadata discovered from known providers.
 - **Git helpers**
+  - ✅ `collect_worktree_diff_breakdown()` exposes staged/unstaged/untracked file diffs plus upstream divergence in a single pass.
   - Async functions to compute staged vs unstaged summaries and produce diffs without blocking.
   - Utility to fetch “last N commits” metadata for the worktree.
   - Surface actionable diagnostics when git commands fail (full command, exit code, stderr) and skip inspection gracefully when `.git` metadata is missing to avoid log spam.
@@ -63,7 +64,7 @@
 - Replace `useTasks()` with `useWorktrees()` hook fetching the new API and subscribing to WebSocket updates.
 - Rework layout:
   - New `WorktreeList` component replacing `TaskTree`.
-  - `DiffPanel` supporting staged/untracked toggles.
+  - ✅ `DiffPanel` surfaces staged, unstaged, untracked files with inline unified diffs and default expansion of the first change.
   - `SessionList` reading metadata and lazy-loading details.
   - `ProcessPane` showing streaming command output (WebSocket).
 - Add “Launch command” dialog allowing template commands (e.g., `pnpm dev`, `pnpm test`, custom).
@@ -78,8 +79,8 @@
 ## Delivery Milestones (E2E Features)
 1. **Worktree visibility (CLI + Dashboard)**
    - Implement `agentdev worktree list --json` enhancements to emit git status, last activity, and prompt metadata.
-   - ✅ Expose `GET /api/worktrees` / `GET /api/worktrees/{id}` and make the worktree-first dashboard the default homepage (feature flag removed).
-   - ✅ Acceptance: a freshly created worktree appears in both CLI and dashboard with accurate git summaries.
+   - ✅ Expose `GET /api/worktrees`, `GET /api/worktrees/{id}`, and `GET /api/worktrees/{id}/git`; make the worktree-first dashboard the default homepage (feature flag removed).
+   - ✅ Acceptance: a freshly created worktree appears in both CLI and dashboard with accurate git summaries and per-file diffs.
 2. **Session surfacing**
    - ✅ Ship `agentdev sessions list` (Codex provider first); dashboard currently consumes summaries via `/api/worktrees`.
    - 🔄 Sessions tab scaffolded with provider badges, last message, and resume placeholder. Still need detailed transcript fetching and resume wiring.

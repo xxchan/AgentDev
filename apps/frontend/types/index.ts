@@ -81,3 +81,22 @@ export interface WorktreeSummary {
 export interface WorktreeListResponse {
   worktrees: WorktreeSummary[];
 }
+
+export interface WorktreeCommitDiff {
+  reference: string;
+  diff: string;
+}
+
+export interface WorktreeFileDiff {
+  path: string;
+  display_path: string;
+  status: string;
+  diff: string;
+}
+
+export interface WorktreeGitDetails {
+  commit_diff?: WorktreeCommitDiff | null;
+  staged: WorktreeFileDiff[];
+  unstaged: WorktreeFileDiff[];
+  untracked: WorktreeFileDiff[];
+}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { WorktreeSummary } from '@/types';
+import { WorktreeGitDetails, WorktreeSummary } from '@/types';
 
 interface WorktreeDetailsProps {
   worktree: WorktreeSummary | null;
@@ -33,10 +33,101 @@ export default function WorktreeDetails({
   isLoading,
 }: WorktreeDetailsProps) {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
+  const [gitDetails, setGitDetails] = useState<WorktreeGitDetails | null>(null);
+  const [gitError, setGitError] = useState<string | null>(null);
+  const [isGitLoading, setIsGitLoading] = useState(false);
+  const [expandedDiffKey, setExpandedDiffKey] = useState<string | null>(null);
+  const worktreeId = worktree?.id ?? null;
 
   useEffect(() => {
     setActiveTab('overview');
-  }, [worktree?.id]);
+  }, [worktreeId]);
+
+  useEffect(() => {
+    setGitDetails(null);
+    setGitError(null);
+    setIsGitLoading(false);
+    setExpandedDiffKey(null);
+  }, [worktreeId]);
+
+  useEffect(() => {
+    if (activeTab !== 'git' || !worktreeId) {
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    const currentWorktreeId = worktreeId;
+
+    async function loadGitDetails() {
+      setIsGitLoading(true);
+      setGitError(null);
+
+      try {
+        const response = await fetch(
+          `/api/worktrees/${encodeURIComponent(currentWorktreeId)}/git`,
+          { signal: controller.signal },
+        );
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(
+            message || `Failed to load git details (${response.status})`,
+          );
+        }
+
+        const payload: WorktreeGitDetails = await response.json();
+        if (!cancelled) {
+          setGitDetails(payload);
+        }
+      } catch (err) {
+        if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) {
+          return;
+        }
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        setGitError(message);
+        setGitDetails(null);
+      } finally {
+        if (!cancelled) {
+          setIsGitLoading(false);
+        }
+      }
+    }
+
+    loadGitDetails();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [activeTab, worktreeId]);
+
+  useEffect(() => {
+    if (!gitDetails || expandedDiffKey) {
+      return;
+    }
+
+    const pickFirstDiffKey = () => {
+      const groups: Array<[string, WorktreeGitDetails['staged']]> = [
+        ['staged', gitDetails.staged],
+        ['unstaged', gitDetails.unstaged],
+        ['untracked', gitDetails.untracked],
+      ];
+      for (const [group, entries] of groups) {
+        for (let i = 0; i < entries.length; i += 1) {
+          const diff = entries[i]?.diff?.trim();
+          if (diff) {
+            return `${group}:${i}`;
+          }
+        }
+      }
+      return null;
+    };
+
+    const candidate = pickFirstDiffKey();
+    if (candidate) {
+      setExpandedDiffKey(candidate);
+    }
+  }, [gitDetails, expandedDiffKey]);
 
   if (!worktree) {
     return (
@@ -60,6 +151,11 @@ export default function WorktreeDetails({
 
   const status = worktree.git_status ?? undefined;
   const commit = worktree.head_commit ?? undefined;
+
+  const stagedCount = gitDetails?.staged.length ?? 0;
+  const unstagedCount = gitDetails?.unstaged.length ?? 0;
+  const untrackedCount = gitDetails?.untracked.length ?? 0;
+  const totalDiffCount = stagedCount + unstagedCount + untrackedCount;
 
   const overviewCards = [
     {
@@ -151,6 +247,79 @@ export default function WorktreeDetails({
     </div>
   );
 
+  const renderDiffGroup = (
+    entries: WorktreeGitDetails['staged'],
+    groupKey: string,
+    emptyMessage: string,
+  ) => {
+    if (!entries.length) {
+      return (
+        <div className="rounded-md border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+          {emptyMessage}
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        {entries.map((entry, index) => {
+          const itemKey = `${groupKey}:${index}`;
+          const isOpen = expandedDiffKey === itemKey;
+
+          return (
+            <div
+              key={itemKey}
+              className="overflow-hidden rounded-lg border border-gray-200 bg-white"
+            >
+              <button
+                type="button"
+                onClick={() =>
+                  setExpandedDiffKey((prev) => (prev === itemKey ? null : itemKey))
+                }
+                className={`flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition ${
+                  isOpen ? 'bg-blue-50' : 'hover:bg-gray-50'
+                }`}
+              >
+                <div className="flex flex-1 flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex min-w-[1.5rem] justify-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-gray-700">
+                      {entry.status}
+                    </span>
+                    <span className="font-mono text-xs text-gray-600">
+                      {entry.display_path}
+                    </span>
+                  </div>
+                  {!isOpen && (
+                    <p className="text-xs text-gray-400">
+                      Click to preview unified diff
+                    </p>
+                  )}
+                </div>
+                <span className="text-xs text-gray-400">
+                  {isOpen ? 'Hide diff' : 'Show diff'}
+                </span>
+              </button>
+
+              {isOpen && (
+                <div className="border-t border-gray-200 bg-gray-950/95 px-4 py-4">
+                  {entry.diff.trim() ? (
+                    <pre className="max-h-96 overflow-auto text-xs leading-relaxed text-gray-100">
+                      {entry.diff}
+                    </pre>
+                  ) : (
+                    <p className="text-xs text-gray-300">
+                      No diff output available for this file.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderGit = () => (
     <div className="space-y-4">
       <section className="rounded-lg border border-gray-200 bg-white px-4 py-4">
@@ -208,15 +377,93 @@ export default function WorktreeDetails({
         )}
       </section>
 
-      <section className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-600">
-        <p className="font-medium text-gray-700">Diff preview coming soon</p>
-        <p className="mt-2 leading-relaxed">
-          The dashboard will surface staged versus unstaged files and let you preview diffs
-          inline. Today you can continue to run{' '}
-          <code className="rounded bg-white px-1 py-0.5">git status</code> or{' '}
-          <code className="rounded bg-white px-1 py-0.5">git diff</code> inside the worktree
-          directory while we land the richer UI.
-        </p>
+      <section className="rounded-lg border border-gray-200 bg-white px-4 py-4">
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
+              Diff Breakdown
+            </h3>
+            <p className="text-xs text-gray-500">
+              Staged, unstaged, and untracked changes pulled directly from git
+            </p>
+          </div>
+          {totalDiffCount > 0 && (
+            <span className="text-xs text-gray-400">
+              {totalDiffCount} {totalDiffCount === 1 ? 'entry' : 'entries'}
+            </span>
+          )}
+        </header>
+
+        <div className="mt-4 space-y-5">
+          {isGitLoading ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <div className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-200 border-t-blue-500" />
+              <span>Loading diffs from git…</span>
+            </div>
+          ) : gitError ? (
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              Failed to load diff details: {gitError}
+            </div>
+          ) : gitDetails ? (
+            <>
+              {gitDetails.commit_diff && gitDetails.commit_diff.diff.trim() && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-700">
+                    Divergence vs {gitDetails.commit_diff.reference}
+                  </p>
+                  <pre className="mt-3 max-h-80 overflow-auto bg-gray-950/95 px-3 py-3 text-xs leading-relaxed text-gray-100">
+                    {gitDetails.commit_diff.diff}
+                  </pre>
+                </div>
+              )}
+
+              <div className="space-y-6">
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    Staged ({gitDetails.staged.length})
+                  </h4>
+                  <div className="mt-2">
+                    {renderDiffGroup(
+                      gitDetails.staged,
+                      'staged',
+                      'No staged changes detected.',
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    Unstaged ({gitDetails.unstaged.length})
+                  </h4>
+                  <div className="mt-2">
+                    {renderDiffGroup(
+                      gitDetails.unstaged,
+                      'unstaged',
+                      'Working tree matches staged content.',
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    Untracked ({gitDetails.untracked.length})
+                  </h4>
+                  <div className="mt-2">
+                    {renderDiffGroup(
+                      gitDetails.untracked,
+                      'untracked',
+                      'No new files detected.',
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-gray-500">
+              Diff details will appear once git metadata loads for this worktree.
+            </p>
+          )}
+        </div>
       </section>
     </div>
   );

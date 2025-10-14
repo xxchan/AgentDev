@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import { cn } from '@/lib/utils';
 import { WorktreeSummary } from '@/types';
 
 interface WorktreeListProps {
@@ -53,9 +54,9 @@ export default function WorktreeList({
 
   if (isLoading && sortedWorktrees.length === 0) {
     return (
-      <div className="p-4 text-sm text-gray-500">
+      <div className="p-4 text-sm text-muted-foreground">
         <div className="flex items-center space-x-2">
-          <div className="inline-block w-4 h-4 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
+          <div className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" />
           <span>Loading worktrees...</span>
         </div>
       </div>
@@ -64,11 +65,11 @@ export default function WorktreeList({
 
   if (!isLoading && sortedWorktrees.length === 0) {
     return (
-      <div className="p-6 text-center text-gray-500">
+      <div className="p-6 text-center text-muted-foreground">
         <p className="text-sm font-medium">No managed worktrees yet</p>
-        <p className="text-xs mt-2">
-          Use <code className="px-1 py-0.5 bg-gray-100 rounded">agentdev worktree create</code>{' '}
-          or <code className="px-1 py-0.5 bg-gray-100 rounded">agentdev worktree add</code> to get started.
+        <p className="mt-2 text-xs">
+          Use <code className="rounded bg-muted px-1 py-0.5">agentdev worktree create</code>{' '}
+          or <code className="rounded bg-muted px-1 py-0.5">agentdev worktree add</code> to get started.
         </p>
       </div>
     );
@@ -76,11 +77,13 @@ export default function WorktreeList({
 
   return (
     <div className="py-3">
-      <div className="px-4 pb-3 border-b border-gray-200">
-        <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+      <div className="border-b border-border px-4 pb-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Worktrees
         </h2>
-        <p className="text-xs text-gray-500 mt-1">Sorted by recent activity</p>
+        <p className="mt-1 text-xs text-muted-foreground/80">
+          Sorted by recent activity
+        </p>
       </div>
       <div className="mt-2">
         {sortedWorktrees.map((worktree) => {
@@ -98,13 +101,18 @@ export default function WorktreeList({
               key={worktree.id}
               type="button"
               onClick={() => onSelect(worktree.id)}
-              className={`w-full text-left px-4 py-3 transition-colors ${
-                isSelected ? 'bg-blue-50 border-r-2 border-blue-500' : 'hover:bg-gray-50'
-              }`}
+              className={cn(
+                'w-full border-l-2 border-transparent px-4 py-3 text-left transition-colors',
+                isSelected
+                  ? 'border-primary/70 bg-primary/10 text-foreground'
+                  : 'hover:bg-muted',
+              )}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <span className="font-medium text-gray-900 truncate">{worktree.name}</span>
+                  <span className="truncate font-medium text-foreground">
+                    {worktree.name}
+                  </span>
                   {status && (
                     <span
                       className={`text-xs px-2 py-0.5 rounded-full ${
@@ -117,16 +125,16 @@ export default function WorktreeList({
                     </span>
                   )}
                 </div>
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-muted-foreground">
                   {formatRelativeTime(worktree.last_activity_at)}
                 </span>
               </div>
-              <div className="mt-1 text-xs text-gray-600 flex flex-wrap items-center gap-2">
-                <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span className="rounded bg-muted px-1.5 py-0.5 font-mono">
                   {worktree.repo_name}/{worktree.branch}
                 </span>
                 {status && (status.ahead > 0 || status.behind > 0) && (
-                  <span className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">
+                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-primary">
                     {status.ahead > 0 && <span>↑{status.ahead}</span>}
                     {status.ahead > 0 && status.behind > 0 && <span className="mx-1">·</span>}
                     {status.behind > 0 && <span>↓{status.behind}</span>}

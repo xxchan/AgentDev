@@ -7,6 +7,7 @@
     "dev:frontend": "cd apps/frontend && pnpm run dev",
     "build:frontend": "cd apps/frontend && pnpm run build",
     "dev:backend": "cd apps/backend && cargo run --bin agentdev-ui",
+    "dev:ui": "./scripts/dev-ui.sh",
     "build": "pnpm run build:frontend && cd apps/backend && cargo build --release",
     "ui": "cd apps/backend && cargo run --bin agentdev-ui"
   },
