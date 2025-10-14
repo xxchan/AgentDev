@@ -112,28 +112,10 @@ pub struct ProcessRegistry {
 
 impl ProcessRegistry {
     pub fn load() -> Result<Self> {
-        let path = registry_path()?;
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read process registry at {}", path.display()))?;
-        let registry = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse process registry at {}", path.display()))?;
-        Ok(registry)
-    }
-
-    pub fn save(&self) -> Result<()> {
-        let path = registry_path()?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).context("Failed to create config directory for registry")?;
-        }
-        let content =
-            serde_json::to_string_pretty(self).context("Failed to serialize process registry")?;
-        fs::write(&path, content)
-            .with_context(|| format!("Failed to write process registry to {}", path.display()))?;
-        Ok(())
+        let _guard = registry_lock()
+            .lock()
+            .expect("Process registry lock poisoned");
+        Self::load_unlocked()
     }
 
     pub fn insert(&mut self, record: ProcessRecord) {
@@ -205,9 +187,9 @@ impl ProcessRegistry {
         let _guard = registry_lock()
             .lock()
             .expect("Process registry lock poisoned");
-        let mut registry = Self::load()?;
+        let mut registry = Self::load_unlocked()?;
         mutator(&mut registry)?;
-        registry.save()?;
+        registry.save_unlocked()?;
         Ok(())
     }
 }
@@ -224,4 +206,31 @@ pub fn canonicalize_cwd(path: &Path) -> PathBuf {
 fn registry_lock() -> &'static Mutex<()> {
     static REGISTRY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     REGISTRY_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+impl ProcessRegistry {
+    fn load_unlocked() -> Result<Self> {
+        let path = registry_path()?;
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read process registry at {}", path.display()))?;
+        let registry = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse process registry at {}", path.display()))?;
+        Ok(registry)
+    }
+
+    fn save_unlocked(&self) -> Result<()> {
+        let path = registry_path()?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).context("Failed to create config directory for registry")?;
+        }
+        let content =
+            serde_json::to_string_pretty(self).context("Failed to serialize process registry")?;
+        fs::write(&path, content)
+            .with_context(|| format!("Failed to write process registry to {}", path.display()))?;
+        Ok(())
+    }
 }

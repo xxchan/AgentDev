@@ -617,7 +617,6 @@ fn launch_worktree_command(
         return Ok(LaunchCommandResult::NotFound);
     };
 
-    let mut registry = ProcessRegistry::load()?;
     let mut record = ProcessRecord::new(
         worktree_id.clone(),
         info.name.clone(),
