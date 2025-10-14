@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Task, Agent, CreateTaskRequest } from '@/types';
+import { Task, Agent } from '@/types';
 import { 
   ChevronDownIcon, 
   ChevronRightIcon, 

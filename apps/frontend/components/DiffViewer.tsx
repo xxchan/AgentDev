@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import type * as Diff2Html from 'diff2html';
 
 interface DiffViewerProps {
   diffText: string;

@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
-import type { WebLinksAddon } from '@xterm/addon-web-links';
 
 interface TmuxTerminalProps {
   taskId: string | null;

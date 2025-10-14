@@ -38,8 +38,8 @@ export default function MainLayout({ sidebar, main, bottom }: MainLayoutProps) {
             {main}
           </main>
 
-          {/* Bottom terminal panel */}
-          <div className="h-80 bg-gray-900 border-t border-gray-200">
+          {/* Bottom processes panel */}
+          <div className="h-80 border-t border-gray-200 bg-white">
             {bottom}
           </div>
         </div>

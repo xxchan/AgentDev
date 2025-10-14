@@ -69,19 +69,19 @@
 - Integrate optimistic updates for quick actions (`archive`, `delete`, `merge`).
 
 ## Migration Plan
-1. **Backend schema:** Introduce worktree-focused structs and endpoints while keeping old `/api/tasks` for compatibility until frontend switches.
-2. **Frontend toggle:** Add experimental flag (`NEXT_PUBLIC_ENABLE_WORKTREE_DASHBOARD`) to develop the new layout alongside the old one.
-3. **Cut-over:** Once feature parity is reached, remove task-centric components/endpoints, update docs, and clean unused code.
+1. **Backend schema:** Introduce worktree-focused structs and endpoints while keeping old `/api/tasks` for compatibility until frontend switches. ✅
+2. **Frontend toggle:** Add experimental flag (`NEXT_PUBLIC_ENABLE_WORKTREE_DASHBOARD`) to develop the new layout alongside the old one. ✅ (flag removed after cut-over)
+3. **Cut-over:** Once feature parity is reached, remove task-centric components/endpoints, update docs, and clean unused code. 🔄 Worktree UI is primary; task-centric remnants remain for backwards compatibility.
 4. **Follow-ups:** Optional settings page for default commands, integration with summarizer service, search/filter for large worktree lists.
 
 ## Delivery Milestones (E2E Features)
 1. **Worktree visibility (CLI + Dashboard)**
    - Implement `agentdev worktree list --json` enhancements to emit git status, last activity, and prompt metadata.
-   - ✅ Expose `GET /api/worktrees` / `GET /api/worktrees/{id}` and render the new Worktree overview tabs under a feature flag (`NEXT_PUBLIC_ENABLE_WORKTREE_DASHBOARD`).
+   - ✅ Expose `GET /api/worktrees` / `GET /api/worktrees/{id}` and make the worktree-first dashboard the default homepage (feature flag removed).
    - ✅ Acceptance: a freshly created worktree appears in both CLI and dashboard with accurate git summaries.
 2. **Session surfacing**
    - ✅ Ship `agentdev sessions list` (Codex provider first); dashboard currently consumes summaries via `/api/worktrees`.
-   - Display session summaries in a dedicated Sessions tab with provider badges and timestamps.
+   - 🔄 Sessions tab scaffolded with provider badges, last message, and resume placeholder. Still need detailed transcript fetching and resume wiring.
    - Acceptance: running an agent via Codex updates both CLI and UI session listings without manual refresh.
 3. **Ad-hoc command runner**
    - Land process registry + `agentdev x exec` integration, plus API (`POST /api/worktrees/{id}/commands`, log streaming).
