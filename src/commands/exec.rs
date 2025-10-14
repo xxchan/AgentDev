@@ -5,8 +5,12 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
+use agentdev::process_registry::{ProcessRecord, ProcessRegistry, ProcessStatus};
+
 use crate::input::smart_select;
 use crate::state::{WorktreeInfo, XlaudeState};
+
+const MAX_PROCESSES_PER_WORKTREE: usize = 25;
 
 /// Execute an arbitrary command inside a managed worktree.
 pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> Result<()> {
@@ -52,21 +56,65 @@ pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> 
         .split_first()
         .context("Command tokens unexpectedly empty")?;
 
+    let mut registry = ProcessRegistry::load()?;
+    let worktree_key = XlaudeState::make_key(&worktree.repo_name, &worktree.name);
+    let mut record = ProcessRecord::new(
+        worktree_key,
+        worktree.name.clone(),
+        worktree.repo_name.clone(),
+        command_tokens.clone(),
+        Some(worktree.path.clone()),
+        ProcessStatus::Running,
+    );
+    record.description = Some("Launched via agentdev worktree exec".to_string());
+    let process_id = record.id.clone();
+    registry.insert(record);
+    registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+    registry
+        .save()
+        .context("Failed to persist process registry after launch")?;
+
     let status = Command::new(program)
         .args(args)
         .current_dir(&worktree.path)
-        .status()
-        .with_context(|| format!("Failed to spawn '{}'", program))?;
+        .status();
 
-    if !status.success() {
-        if let Some(code) = status.code() {
-            bail!("Command exited with status {code}");
-        } else {
-            bail!("Command terminated by signal");
+    match status {
+        Ok(exit) => {
+            let outcome = if exit.success() {
+                ProcessStatus::Succeeded
+            } else {
+                ProcessStatus::Failed
+            };
+            registry.update(&process_id, |record| {
+                record.mark_finished(outcome, exit.code(), None);
+            })?;
+            registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+            registry
+                .save()
+                .context("Failed to persist process registry after completion")?;
+
+            if !exit.success() {
+                if let Some(code) = exit.code() {
+                    bail!("Command exited with status {code}");
+                } else {
+                    bail!("Command terminated by signal");
+                }
+            }
+            Ok(())
+        }
+        Err(err) => {
+            let error_message = format!("Failed to spawn '{program}': {err}");
+            registry.update(&process_id, |record| {
+                record.mark_finished(ProcessStatus::Failed, None, Some(error_message.clone()));
+            })?;
+            registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+            registry
+                .save()
+                .context("Failed to persist process registry after spawn error")?;
+            Err(err).with_context(|| format!("Failed to spawn '{program}'"))
         }
     }
-
-    Ok(())
 }
 
 fn resolve_target_worktree(state: &XlaudeState, explicit: Option<String>) -> Result<WorktreeInfo> {

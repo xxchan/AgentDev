@@ -23,6 +23,7 @@ use agentdev::{
         get_repo_name, head_commit_info, summarize_worktree_status, update_submodules,
         CommitsAhead, HeadCommitInfo, WorktreeGitStatus,
     },
+    process_registry::{ProcessRegistry, ProcessStatus as RegistryProcessStatus},
     sessions::{canonicalize as canonicalize_session_path, default_providers, SessionRecord},
     state::{WorktreeInfo, XlaudeState},
     tmux::TmuxManager,
@@ -214,6 +215,18 @@ impl From<CommitsAhead> for WorktreeCommitsAheadPayload {
                 .into_iter()
                 .map(WorktreeCommitPayload::from)
                 .collect(),
+        }
+    }
+}
+
+impl From<RegistryProcessStatus> for WorktreeProcessStatus {
+    fn from(value: RegistryProcessStatus) -> Self {
+        match value {
+            RegistryProcessStatus::Pending => WorktreeProcessStatus::Pending,
+            RegistryProcessStatus::Running => WorktreeProcessStatus::Running,
+            RegistryProcessStatus::Succeeded => WorktreeProcessStatus::Succeeded,
+            RegistryProcessStatus::Failed => WorktreeProcessStatus::Failed,
+            RegistryProcessStatus::Unknown => WorktreeProcessStatus::Unknown,
         }
     }
 }
@@ -552,9 +565,29 @@ fn collect_worktree_processes(worktree_id: &str) -> Result<Option<WorktreeProces
         });
     }
 
-    Ok(Some(WorktreeProcessListResponse {
-        processes: Vec::new(),
-    }))
+    let registry = ProcessRegistry::load()?;
+    let processes = registry
+        .processes_for_worktree(worktree_id)
+        .into_iter()
+        .map(|record| WorktreeProcessSummary {
+            id: record.id.clone(),
+            command: record.command.clone(),
+            status: WorktreeProcessStatus::from(record.status.clone()),
+            started_at: Some(record.started_at),
+            finished_at: record.finished_at,
+            exit_code: record.exit_code,
+            cwd: record
+                .cwd
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            description: record
+                .description
+                .clone()
+                .or_else(|| record.error.clone()),
+        })
+        .collect();
+
+    Ok(Some(WorktreeProcessListResponse { processes }))
 }
 
 impl From<agentdev::git::GitFileDiff> for WorktreeFileDiffPayload {

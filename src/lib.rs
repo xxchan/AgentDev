@@ -2,6 +2,7 @@
 pub mod claude;
 pub mod config;
 pub mod git;
+pub mod process_registry;
 pub mod sessions;
 pub mod state;
 pub mod tmux;

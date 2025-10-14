@@ -22,12 +22,13 @@
 - Worktree list sidebar now ships with repository grouping, compact spacing, and clearer status/relative time badges for at-a-glance scanning.
 - Worktree detail view protects against missing commit ids and extends relative time formatting to cover week-level granularity.
 - Hooks migrated to `useWorktrees()` polling the worktree registry API; page wiring selects the first active worktree by default.
-- Process runner placeholder remains static while backend command streaming is under construction.
+- Process pane now surfaces metadata but still lacks live log streaming while backend wiring is in progress.
+- Process pane queries `/api/worktrees/:id/processes`, backed by the CLI process registry, to surface running/completed commands with status and exit codes.
 
 ## Next Focus
-- Plumb command execution metadata from the backend (`/api/worktrees/{id}/commands`) and surface active processes within the bottom pane, replacing the static placeholder.
 - Add command launch affordance in the UI that triggers the upcoming API and optimistically shows pending processes.
 - Ensure WebSocket wiring (or SSE fallback) streams process logs with graceful degradation when the backend is unavailable.
+- Extend the registry to capture live stdout/stderr tails and expose them through the process API for inline log viewing.
 
 ## Information Architecture
 - **Sidebar – Worktree List**
