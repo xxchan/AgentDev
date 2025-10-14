@@ -24,6 +24,11 @@
 - Hooks migrated to `useWorktrees()` polling the worktree registry API; page wiring selects the first active worktree by default.
 - Process runner placeholder remains static while backend command streaming is under construction.
 
+## Next Focus
+- Plumb command execution metadata from the backend (`/api/worktrees/{id}/commands`) and surface active processes within the bottom pane, replacing the static placeholder.
+- Add command launch affordance in the UI that triggers the upcoming API and optimistically shows pending processes.
+- Ensure WebSocket wiring (or SSE fallback) streams process logs with graceful degradation when the backend is unavailable.
+
 ## Information Architecture
 - **Sidebar – Worktree List**
   - Rows: `repo-name/worktree-name`
