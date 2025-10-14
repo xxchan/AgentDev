@@ -77,25 +77,52 @@ pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> 
     let status = Command::new(program)
         .args(args)
         .current_dir(&worktree.path)
-        .status();
+        .output();
 
     match status {
-        Ok(exit) => {
-            let outcome = if exit.success() {
+        Ok(output) => {
+            let stdout_text = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr_text = String::from_utf8_lossy(&output.stderr).to_string();
+
+            if !stdout_text.is_empty() {
+                print!("{stdout_text}");
+            }
+            if !stderr_text.is_empty() {
+                eprint!("{stderr_text}");
+            }
+
+            let stdout_option = if stdout_text.is_empty() {
+                None
+            } else {
+                Some(stdout_text)
+            };
+            let stderr_option = if stderr_text.is_empty() {
+                None
+            } else {
+                Some(stderr_text)
+            };
+
+            let outcome = if output.status.success() {
                 ProcessStatus::Succeeded
             } else {
                 ProcessStatus::Failed
             };
             registry.update(&process_id, |record| {
-                record.mark_finished(outcome, exit.code(), None);
+                record.mark_finished(
+                    outcome,
+                    output.status.code(),
+                    None,
+                    stdout_option.clone(),
+                    stderr_option.clone(),
+                );
             })?;
             registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
             registry
                 .save()
                 .context("Failed to persist process registry after completion")?;
 
-            if !exit.success() {
-                if let Some(code) = exit.code() {
+            if !output.status.success() {
+                if let Some(code) = output.status.code() {
                     bail!("Command exited with status {code}");
                 } else {
                     bail!("Command terminated by signal");
@@ -106,7 +133,13 @@ pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> 
         Err(err) => {
             let error_message = format!("Failed to spawn '{program}': {err}");
             registry.update(&process_id, |record| {
-                record.mark_finished(ProcessStatus::Failed, None, Some(error_message.clone()));
+                record.mark_finished(
+                    ProcessStatus::Failed,
+                    None,
+                    Some(error_message.clone()),
+                    None,
+                    None,
+                );
             })?;
             registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
             registry

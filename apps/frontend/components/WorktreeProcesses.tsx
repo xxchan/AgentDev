@@ -102,6 +102,14 @@ function getStatusLabel(status: WorktreeProcessStatus) {
 function ProcessCard({ process }: { process: WorktreeProcessSummary }) {
   const statusClass = STATUS_STYLES[process.status] ?? STATUS_STYLES.unknown;
   const statusLabel = getStatusLabel(process.status);
+  const hasStdout = Boolean(process.stdout && process.stdout.length > 0);
+  const hasStderr = Boolean(process.stderr && process.stderr.length > 0);
+  const hasLogs = hasStdout || hasStderr;
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  useEffect(() => {
+    setIsExpanded(false);
+  }, [process.id]);
 
   const detailLabel = useMemo(() => {
     if (process.status === 'running') {
@@ -160,6 +168,57 @@ function ProcessCard({ process }: { process: WorktreeProcessSummary }) {
           CWD: <code className="font-mono text-[0.7rem]">{process.cwd}</code>
         </div>
       )}
+      {hasLogs && (
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            className="self-start text-xs font-medium text-primary hover:underline"
+            onClick={() => setIsExpanded((value) => !value)}
+            aria-expanded={isExpanded}
+          >
+            {isExpanded ? 'Hide logs' : 'Show logs'}
+          </button>
+          {isExpanded && (
+            <div className="flex flex-col gap-3">
+              {hasStdout && (
+                <LogViewer title="stdout" value={process.stdout ?? ''} />
+              )}
+              {hasStderr && (
+                <LogViewer title="stderr" value={process.stderr ?? ''} variant="error" />
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LogViewer({
+  title,
+  value,
+  variant = 'default',
+}: {
+  title: string;
+  value: string;
+  variant?: 'default' | 'error';
+}) {
+  const trimmed = value.replace(/\s+$/u, '');
+  const borderColor =
+    variant === 'error'
+      ? 'border-rose-200 bg-rose-50 text-rose-800'
+      : 'border-muted bg-muted text-foreground';
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {title}
+      </span>
+      <pre
+        className={`max-h-48 overflow-auto rounded-md border px-3 py-2 text-xs font-mono leading-relaxed ${borderColor}`}
+      >
+        {trimmed || '(empty)'}
+      </pre>
     </div>
   );
 }

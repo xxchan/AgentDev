@@ -25,10 +25,13 @@
 - Process pane now surfaces metadata but still lacks live log streaming while backend wiring is in progress.
 - Process pane queries `/api/worktrees/:id/processes`, backed by the CLI process registry, to surface running/completed commands with status and exit codes.
 - Dashboard launch dialog calls `/api/worktrees/:id/commands`, optimistically adding pending rows so new commands appear immediately.
+- Backend/CLI capture stdout and stderr for each finished command, persist them in the shared registry, and return them via the processes API so the UI can show historical logs.
+- Process cards render a collapsible log viewer that exposes the persisted stdout/stderr payloads per command.
 
 ## Next Focus
-- Ensure WebSocket wiring (or SSE fallback) streams process logs with graceful degradation when the backend is unavailable.
-- Extend the registry to capture live stdout/stderr tails and expose them through the process API for inline log viewing.
+- Flesh out automated coverage: backend integration tests for `/api/worktrees/:id/processes` and `/commands`, plus frontend/component smoke tests around the launch dialog and log viewer.
+- Decide on log delivery improvements (e.g. streaming) once persistence tests land; not immediately blocking but should stay on the roadmap.
+- Revisit error-handling UX for failed launches (surface stderr snippet inline, offer retry).
 
 ## Information Architecture
 - **Sidebar – Worktree List**

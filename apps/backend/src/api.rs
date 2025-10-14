@@ -153,6 +153,10 @@ pub struct WorktreeProcessSummary {
     pub exit_code: Option<i32>,
     pub cwd: Option<String>,
     pub description: Option<String>,
+    #[serde(default)]
+    pub stdout: Option<String>,
+    #[serde(default)]
+    pub stderr: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -747,11 +751,32 @@ fn run_command_runner(
     let status = Command::new(program)
         .args(args)
         .current_dir(worktree_path)
-        .status();
+        .output();
 
     match status {
-        Ok(exit) => {
-            let outcome = if exit.success() {
+        Ok(output) => {
+            let stdout_text = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr_text = String::from_utf8_lossy(&output.stderr).to_string();
+
+            if !stdout_text.is_empty() {
+                print!("{stdout_text}");
+            }
+            if !stderr_text.is_empty() {
+                eprint!("{stderr_text}");
+            }
+
+            let stdout_option = if stdout_text.is_empty() {
+                None
+            } else {
+                Some(stdout_text)
+            };
+            let stderr_option = if stderr_text.is_empty() {
+                None
+            } else {
+                Some(stderr_text)
+            };
+
+            let outcome = if output.status.success() {
                 RegistryProcessStatus::Succeeded
             } else {
                 RegistryProcessStatus::Failed
@@ -759,14 +784,20 @@ fn run_command_runner(
             {
                 let mut registry = ProcessRegistry::load()?;
                 registry.update(process_id, |record| {
-                    record.mark_finished(outcome, exit.code(), None);
+                    record.mark_finished(
+                        outcome,
+                        output.status.code(),
+                        None,
+                        stdout_option.clone(),
+                        stderr_option.clone(),
+                    );
                 })?;
                 registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
                 registry.save()?;
             }
 
-            if !exit.success() {
-                if let Some(code) = exit.code() {
+            if !output.status.success() {
+                if let Some(code) = output.status.code() {
                     return Err(anyhow!("Command exited with status {code}"));
                 }
                 return Err(anyhow!("Command terminated by signal"));
@@ -780,6 +811,8 @@ fn run_command_runner(
                     RegistryProcessStatus::Failed,
                     None,
                     Some(error_message.clone()),
+                    None,
+                    None,
                 );
             })?;
             registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
@@ -802,11 +835,13 @@ fn process_record_to_summary(record: &ProcessRecord) -> WorktreeProcessSummary {
         cwd: record
             .cwd
             .as_ref()
-            .map(|path| path.display().to_string()),
+        .map(|path| path.display().to_string()),
         description: record
             .description
             .clone()
             .or_else(|| record.error.clone()),
+        stdout: record.stdout.clone(),
+        stderr: record.stderr.clone(),
     }
 }
 

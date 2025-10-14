@@ -41,6 +41,10 @@ pub struct ProcessRecord {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -68,6 +72,8 @@ impl ProcessRecord {
             cwd,
             description: None,
             error: None,
+            stdout: None,
+            stderr: None,
             updated_at: started_at,
         }
     }
@@ -76,6 +82,8 @@ impl ProcessRecord {
         self.status = ProcessStatus::Running;
         self.started_at = Utc::now();
         self.updated_at = self.started_at;
+        self.stdout = None;
+        self.stderr = None;
     }
 
     pub fn mark_finished(
@@ -83,11 +91,15 @@ impl ProcessRecord {
         status: ProcessStatus,
         exit_code: Option<i32>,
         error: Option<String>,
+        stdout: Option<String>,
+        stderr: Option<String>,
     ) {
         self.status = status;
         self.exit_code = exit_code;
         self.finished_at = Some(Utc::now());
         self.error = error;
+        self.stdout = stdout;
+        self.stderr = stderr;
         self.updated_at = Utc::now();
     }
 }

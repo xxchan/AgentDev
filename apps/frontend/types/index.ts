@@ -126,6 +126,8 @@ export interface WorktreeProcessSummary {
   exit_code?: number | null;
   cwd?: string | null;
   description?: string | null;
+  stdout?: string | null;
+  stderr?: string | null;
 }
 
 export interface WorktreeProcessListResponse {
