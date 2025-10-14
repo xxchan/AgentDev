@@ -80,7 +80,9 @@ pub fn handle_open(name: Option<String>, agent: Option<String>) -> Result<()> {
                         repo_name: repo_name.clone(),
                         created_at: Utc::now(),
                         task_id: None,
+                        task_name: None,
                         initial_prompt: None,
+                        agent_alias: None,
                     },
                 );
                 state.save()?;

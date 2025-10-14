@@ -164,7 +164,11 @@ fn main() -> Result<()> {
             } => handle_merge(name, push, cleanup, strategy, squash),
         },
         Commands::Sessions { cmd } => match cmd {
-            SessionCommands::List { worktree, json } => handle_sessions_list(worktree, json),
+            SessionCommands::List {
+                worktree,
+                all,
+                json,
+            } => handle_sessions_list(worktree, all, json),
         },
         Commands::Completions { shell } => completions::handle_completions(shell),
         Commands::CompleteWorktrees { format } => commands::handle_complete_worktrees(&format),
@@ -271,6 +275,9 @@ enum SessionCommands {
         /// Filter sessions by worktree key or name
         #[arg(long)]
         worktree: Option<String>,
+        /// Include sessions without a tracked worktree association
+        #[arg(long)]
+        all: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,

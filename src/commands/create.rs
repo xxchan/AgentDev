@@ -279,7 +279,9 @@ pub fn handle_create_in_dir_quiet(
             repo_name,
             created_at: Utc::now(),
             task_id: None,
+            task_name: None,
             initial_prompt: None,
+            agent_alias: None,
         },
     );
     state.save()?;

@@ -42,7 +42,7 @@ struct SessionWithWorktree {
     worktree_path: Option<PathBuf>,
 }
 
-pub fn handle_sessions_list(worktree: Option<String>, json: bool) -> Result<()> {
+pub fn handle_sessions_list(worktree: Option<String>, all: bool, json: bool) -> Result<()> {
     let state = XlaudeState::load()?;
 
     let worktree_entries = build_worktree_index(&state);
@@ -79,6 +79,10 @@ pub fn handle_sessions_list(worktree: Option<String>, json: bool) -> Result<()> 
                 eprintln!("{} {}: {}", "[warn]".yellow(), provider.name(), err);
             }
         }
+    }
+
+    if !all {
+        sessions.retain(|session| session.worktree_key.is_some());
     }
 
     if let Some(filter) = worktree_filter {

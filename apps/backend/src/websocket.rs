@@ -1,78 +1,111 @@
+use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::{Path, State, WebSocketUpgrade},
     response::Response,
 };
-use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use tokio::time::{interval, Duration};
 
 use crate::AppState;
-use crate::api::{get_task_state};
 use agentdev::tmux::TmuxManager;
 
 /// WebSocket handler for attaching to tmux sessions
 pub async fn websocket_handler(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path((task_id, agent_id)): Path<(String, String)>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    println!("WebSocket connection request for task {} agent {}", task_id, agent_id);
-    
-    ws.on_upgrade(move |socket| handle_websocket(socket, task_id, agent_id))
+    println!(
+        "WebSocket connection request for task {} agent {}",
+        task_id, agent_id
+    );
+
+    ws.on_upgrade(move |socket| handle_websocket(socket, state, task_id, agent_id))
 }
 
-async fn handle_websocket(socket: WebSocket, task_id: String, agent_id: String) {
-    println!("WebSocket connected for task {} agent {}", task_id, agent_id);
-    
-    let (mut sender, mut receiver) = socket.split();
-    
-    // Find the agent's tmux session
-    let tmux_session = {
-        let task_state = get_task_state();
-        let tasks_map = task_state.lock().unwrap();
-        let task = tasks_map.get(&task_id);
-        let agent = task.and_then(|t| t.agents.iter().find(|a| a.id == agent_id));
-        agent.and_then(|a| a.tmux_session.clone())
+async fn handle_websocket(socket: WebSocket, state: AppState, task_id: String, agent_id: String) {
+    println!(
+        "WebSocket connected for task {} agent {}",
+        task_id, agent_id
+    );
+
+    let agent_info = {
+        let tasks_map = state.tasks.read().await;
+        tasks_map
+            .get(&task_id)
+            .and_then(|task| task.agents.iter().find(|a| a.id == agent_id))
+            .cloned()
     };
-    
-    let Some(session_name_full) = tmux_session else {
-        let _ = sender.send(Message::Text("Error: Agent tmux session not found".to_string())).await;
+
+    let (mut sender, mut receiver) = socket.split();
+
+    let Some(agent) = agent_info else {
+        let _ = sender
+            .send(Message::Text(
+                "Error: Agent not found for this task".to_string(),
+            ))
+            .await;
         return;
     };
-    
-    // Extract session name (remove "agentdev_" prefix)
-    let session_name = session_name_full
-        .strip_prefix("agentdev_")
-        .unwrap_or(&session_name_full);
-    
+
     let tmux_manager = TmuxManager::new();
-    
+    let mut session_full = agent.tmux_session.clone();
+
+    if session_full.is_none() && tmux_manager.session_exists(&agent.name) {
+        session_full = Some(tmux_manager.session_name(&agent.name));
+    }
+
+    let Some(session_name_full) = session_full else {
+        let _ = sender
+            .send(Message::Text(
+                "Error: Agent tmux session not found".to_string(),
+            ))
+            .await;
+        return;
+    };
+
+    // Extract session name (remove "agentdev_" prefix)
+    let session_key = session_name_full
+        .strip_prefix("agentdev_")
+        .unwrap_or(&session_name_full)
+        .to_string();
+
     // Check if session exists
-    if !tmux_manager.session_exists(session_name) {
-        let _ = sender.send(Message::Text("Error: Tmux session does not exist".to_string())).await;
+    if !tmux_manager.session_exists(&session_key) {
+        let _ = sender
+            .send(Message::Text(
+                "Error: Tmux session does not exist".to_string(),
+            ))
+            .await;
         return;
     }
-    
+
     // Send initial connection message
-    if let Err(e) = sender.send(Message::Text(format!("Connected to tmux session: {}", session_name))).await {
+    if let Err(e) = sender
+        .send(Message::Text(format!(
+            "Connected to tmux session: {}",
+            session_key
+        )))
+        .await
+    {
         println!("Failed to send initial message: {}", e);
         return;
     }
-    
+
     // Use channel to communicate between capture task and main loop
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    
+
     // Spawn a task to capture tmux output periodically
-    let session_name_capture = session_name.to_string();
+    let session_name_capture = session_key.clone();
     let tmux_manager_capture = TmuxManager::new();
     let mut last_output = String::new();
-    
+
     let capture_handle = tokio::spawn(async move {
         let mut interval = interval(Duration::from_millis(500)); // Capture every 500ms
-        
+
         loop {
             interval.tick().await;
-            
+
             // Capture tmux pane content
             match tmux_manager_capture.capture_pane(&session_name_capture, 1000) {
                 Ok(output) => {
@@ -93,7 +126,7 @@ async fn handle_websocket(socket: WebSocket, task_id: String, agent_id: String) 
             }
         }
     });
-    
+
     // Handle incoming messages using tokio::select to handle both WebSocket and capture messages
     loop {
         tokio::select! {
@@ -104,32 +137,32 @@ async fn handle_websocket(socket: WebSocket, task_id: String, agent_id: String) 
                     break;
                 }
             }
-            
+
             // Handle WebSocket messages (user input)
             msg = receiver.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        println!("Received input for session {}: {}", session_name, text);
-                        
+                        println!("Received input for session {}: {}", session_key, text);
+
                         // Handle different message types
                         if text.starts_with("input:") {
                             // User input to send to tmux
                             let input = &text[6..]; // Remove "input:" prefix
-                            if let Err(e) = tmux_manager.send_text(session_name, input) {
+                            if let Err(e) = tmux_manager.send_text(&session_key, input) {
                                 println!("Failed to send input to tmux: {}", e);
                                 let _ = sender.send(Message::Text(format!("Error: {}", e))).await;
                             }
                         } else if text == "enter" {
                             // Send Enter key
-                            if let Err(e) = tmux_manager.send_enter(session_name) {
+                            if let Err(e) = tmux_manager.send_enter(&session_key) {
                                 println!("Failed to send enter to tmux: {}", e);
                                 let _ = sender.send(Message::Text(format!("Error: {}", e))).await;
                             }
                         } else if text == "clear" {
                             // Clear terminal
-                            if let Err(e) = tmux_manager.send_text(session_name, "clear") {
+                            if let Err(e) = tmux_manager.send_text(&session_key, "clear") {
                                 println!("Failed to clear tmux: {}", e);
-                            } else if let Err(e) = tmux_manager.send_enter(session_name) {
+                            } else if let Err(e) = tmux_manager.send_enter(&session_key) {
                                 println!("Failed to send enter after clear: {}", e);
                             }
                         } else if text.starts_with("resize:") {
@@ -159,8 +192,11 @@ async fn handle_websocket(socket: WebSocket, task_id: String, agent_id: String) 
             }
         }
     }
-    
+
     // Clean up capture task
     capture_handle.abort();
-    println!("WebSocket disconnected for task {} agent {}", task_id, agent_id);
+    println!(
+        "WebSocket disconnected for task {} agent {}",
+        task_id, agent_id
+    );
 }

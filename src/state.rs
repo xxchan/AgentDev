@@ -18,7 +18,11 @@ pub struct WorktreeInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_alias: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -85,6 +89,10 @@ impl XlaudeState {
             for (k, info) in state.worktrees.iter_mut() {
                 if info.task_id.is_none() {
                     info.task_id = Some(info.name.clone());
+                    changed = true;
+                }
+                if info.task_name.is_none() {
+                    info.task_name = info.task_id.clone().or_else(|| Some(info.name.clone()));
                     changed = true;
                 }
                 // Ensure key format is repo/name (already migrated above)

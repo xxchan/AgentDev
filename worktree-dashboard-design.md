@@ -77,11 +77,11 @@
 ## Delivery Milestones (E2E Features)
 1. **Worktree visibility (CLI + Dashboard)**
    - Implement `agentdev worktree list --json` enhancements to emit git status, last activity, and prompt metadata.
-   - Expose `GET /api/worktrees` / `GET /api/worktrees/{id}` and render the new Worktree overview/diff tabs under a feature flag.
-   - Acceptance: a freshly created worktree appears in both CLI and dashboard with accurate git summaries.
+   - ✅ Expose `GET /api/worktrees` / `GET /api/worktrees/{id}` and render the new Worktree overview tabs under a feature flag (`NEXT_PUBLIC_ENABLE_WORKTREE_DASHBOARD`).
+   - ✅ Acceptance: a freshly created worktree appears in both CLI and dashboard with accurate git summaries.
 2. **Session surfacing**
-   - Ship `agentdev sessions list` (Codex provider first) and corresponding `/api/worktrees/{id}/sessions` endpoint.
-   - Display session summaries in the dashboard Sessions tab with provider badges and timestamps.
+   - ✅ Ship `agentdev sessions list` (Codex provider first); dashboard currently consumes summaries via `/api/worktrees`.
+   - Display session summaries in a dedicated Sessions tab with provider badges and timestamps.
    - Acceptance: running an agent via Codex updates both CLI and UI session listings without manual refresh.
 3. **Ad-hoc command runner**
    - Land process registry + `agentdev x exec` integration, plus API (`POST /api/worktrees/{id}/commands`, log streaming).
