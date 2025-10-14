@@ -200,7 +200,8 @@ export default function WorktreeGitSection({
     const mergeBaseLabel = commitsAhead?.merge_base
       ? formatCommitId(commitsAhead.merge_base)
       : 'unknown';
-    const headShort = commit?.commit_id ? formatCommitId(commit.commit_id) : null;
+    const commitId = commit?.commit_id;
+    const headShort = commitId ? formatCommitId(commitId) : null;
     const lastCommitTime = commit?.timestamp ? formatTimestamp(commit.timestamp) : null;
 
     return (
@@ -232,7 +233,10 @@ export default function WorktreeGitSection({
               {headShort && (
                 <span>
                   HEAD:{' '}
-                  <span className="font-mono text-gray-700" title={commit.commit_id}>
+                  <span
+                    className="font-mono text-gray-700"
+                    title={commitId ?? undefined}
+                  >
                     {headShort}
                   </span>
                 </span>

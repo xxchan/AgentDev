@@ -38,6 +38,10 @@ function formatRelativeTime(diffMs: number) {
   if (diffDays < 7) {
     return `${diffDays}d ago`;
   }
+  const diffWeeks = Math.floor(diffDays / 7);
+  if (diffWeeks < 4) {
+    return `${diffWeeks}w ago`;
+  }
   const diffMonths = Math.floor(diffDays / 30);
   return `${diffMonths}mo ago`;
 }
