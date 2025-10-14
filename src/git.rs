@@ -192,20 +192,71 @@ pub fn recent_git_logs_for_path(path: &Path, limit: usize) -> Vec<String> {
     Vec::new()
 }
 
+fn format_git_command(args: &[&str]) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(args.len() + 1);
+    parts.push("git".to_string());
+    for arg in args {
+        if arg
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '$'))
+        {
+            parts.push(format!("\"{}\"", arg.replace('"', "\\\"")));
+        } else {
+            parts.push((*arg).to_string());
+        }
+    }
+    parts.join(" ")
+}
+
+fn truncate_output(text: &str) -> String {
+    const MAX_LEN: usize = 512;
+    if text.len() <= MAX_LEN {
+        text.trim().to_string()
+    } else {
+        let mut truncated = text[..MAX_LEN].trim_end().to_string();
+        truncated.push_str("… [truncated]");
+        truncated
+    }
+}
+
 pub fn execute_git(args: &[&str]) -> Result<String> {
+    let display_cmd = format_git_command(args);
+
     let output = Command::new("git")
         .args(args)
         .output()
-        .context("Failed to execute git command")?;
+        .map_err(|err| anyhow::anyhow!("Failed to spawn git command: {display_cmd} ({err})"))?;
 
     // Record in debug log buffer
     push_git_log(args, output.status.code(), &output.stdout, &output.stderr);
 
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+
+    let status = output
+        .status
+        .code()
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "signal".to_string());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let mut details = String::new();
+    if !stderr.trim().is_empty() {
+        details.push_str(&format!("stderr: {}", truncate_output(&stderr)));
+    }
+    if !stdout.trim().is_empty() {
+        if !details.is_empty() {
+            details.push_str(" | ");
+        }
+        details.push_str(&format!("stdout: {}", truncate_output(&stdout)));
+    }
+
+    if details.is_empty() {
+        anyhow::bail!("git command failed (exit {status}): {display_cmd}");
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Git command failed: {}", stderr);
+        anyhow::bail!("git command failed (exit {status}): {display_cmd} -> {details}");
     }
 }
 
@@ -605,7 +656,7 @@ pub fn head_commit_info(path: &Path) -> Result<Option<HeadCommitInfo>> {
         .to_str()
         .context("worktree path contains invalid UTF-8")?;
 
-    let args = ["-C", repo, "log", "-1", "--pretty=format:%H\x00%ct\x00%s"];
+    let args = ["-C", repo, "log", "-1", "--pretty=format:%H%x00%ct%x00%s"];
 
     let raw = match execute_git(&args) {
         Ok(output) => output,

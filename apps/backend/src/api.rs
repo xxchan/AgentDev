@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
@@ -153,6 +154,35 @@ fn warn_once(operation: &str, path: &Path, render: impl FnOnce() -> String) {
     }
 }
 
+fn git_metadata_present(path: &Path) -> bool {
+    let git_entry = path.join(".git");
+    if git_entry.is_dir() {
+        return true;
+    }
+    if git_entry.is_file() {
+        if let Ok(contents) = fs::read_to_string(&git_entry) {
+            for line in contents.lines() {
+                if let Some(rest) = line.strip_prefix("gitdir:") {
+                    let trimmed = rest.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let candidate = Path::new(trimmed);
+                    let resolved = if candidate.is_absolute() {
+                        candidate.to_path_buf()
+                    } else {
+                        path.join(candidate)
+                    };
+                    if resolved.exists() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// GET /api/worktrees - Get enriched worktree metadata
 pub async fn get_worktrees() -> impl IntoResponse {
     match tokio::task::spawn_blocking(collect_worktree_summaries).await {
@@ -218,8 +248,18 @@ fn collect_worktree_summary(id: String) -> Result<Option<WorktreeSummary>> {
 
 fn summarize_single_worktree(id: &str, info: &WorktreeInfo) -> WorktreeSummary {
     let path_exists = info.path.exists();
+    let git_ready = path_exists && git_metadata_present(&info.path);
 
-    let git_status = if path_exists {
+    if path_exists && !git_ready {
+        warn_once("git_metadata", &info.path, || {
+            format!(
+                "⚠️  Worktree missing git metadata, skipping inspection: {}",
+                info.path.display()
+            )
+        });
+    }
+
+    let git_status = if git_ready {
         summarize_worktree_status(&info.path, &info.branch)
             .map(WorktreeGitStatusPayload::from)
             .map_err(|err| {
@@ -232,7 +272,7 @@ fn summarize_single_worktree(id: &str, info: &WorktreeInfo) -> WorktreeSummary {
                 err
             })
             .ok()
-    } else {
+    } else if !path_exists {
         warn_once("missing_path", &info.path, || {
             format!(
                 "⚠️  Worktree path missing, skipping git status: {}",
@@ -240,9 +280,11 @@ fn summarize_single_worktree(id: &str, info: &WorktreeInfo) -> WorktreeSummary {
             )
         });
         None
+    } else {
+        None
     };
 
-    let head_commit = if path_exists {
+    let head_commit = if git_ready {
         head_commit_info(&info.path)
             .map(|opt| opt.map(WorktreeCommitPayload::from))
             .map_err(|err| {
