@@ -124,6 +124,33 @@ pub struct WorktreeSummary {
     pub sessions: Vec<WorktreeSessionSummary>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeProcessStatus {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WorktreeProcessSummary {
+    pub id: String,
+    pub command: Vec<String>,
+    pub status: WorktreeProcessStatus,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub exit_code: Option<i32>,
+    pub cwd: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WorktreeProcessListResponse {
+    pub processes: Vec<WorktreeProcessSummary>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct WorktreeListResponse {
     pub worktrees: Vec<WorktreeSummary>,
@@ -264,10 +291,7 @@ impl WorktreeProfiler {
         }
         let start = Instant::now();
         let value = f();
-        println!(
-            "[profile/worktrees] {label} took {:?}",
-            start.elapsed()
-        );
+        println!("[profile/worktrees] {label} took {:?}", start.elapsed());
         value
     }
 
@@ -280,10 +304,7 @@ impl WorktreeProfiler {
         }
         let start = Instant::now();
         let result = f();
-        println!(
-            "[profile/worktrees] {label} took {:?}",
-            start.elapsed()
-        );
+        println!("[profile/worktrees] {label} took {:?}", start.elapsed());
         result
     }
 
@@ -357,10 +378,7 @@ fn collect_external_sessions(profiler: &WorktreeProfiler) -> Vec<NormalizedSessi
                     }
                 }
                 Err(err) => {
-                    eprintln!(
-                        "⚠️  Failed to list sessions from {}: {err}",
-                        provider_name
-                    );
+                    eprintln!("⚠️  Failed to list sessions from {}: {err}", provider_name);
                 }
             }
         }
@@ -399,11 +417,7 @@ fn match_sessions_for_worktree(
             summaries.push(WorktreeSessionSummary {
                 provider: session.record.provider.clone(),
                 session_id: session.record.id.clone(),
-                last_user_message: session
-                    .record
-                    .last_user_message
-                    .clone()
-                    .unwrap_or_default(),
+                last_user_message: session.record.last_user_message.clone().unwrap_or_default(),
                 last_timestamp: session.record.last_timestamp,
                 user_messages: session.record.user_messages.clone(),
             });
@@ -452,6 +466,29 @@ pub async fn get_worktree(AxumPath(worktree_id): AxumPath<String>) -> impl IntoR
     }
 }
 
+/// GET /api/worktrees/:id/processes - List active and recent processes for a worktree
+pub async fn get_worktree_processes(AxumPath(worktree_id): AxumPath<String>) -> impl IntoResponse {
+    let id_for_error = worktree_id.clone();
+    match tokio::task::spawn_blocking(move || collect_worktree_processes(&worktree_id)).await {
+        Ok(Ok(Some(response))) => Json(response).into_response(),
+        Ok(Ok(None)) => (
+            StatusCode::NOT_FOUND,
+            format!("Worktree {id_for_error} not found"),
+        )
+            .into_response(),
+        Ok(Err(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to load worktree processes: {err}"),
+        )
+            .into_response(),
+        Err(join_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Worktree processes task failed: {join_err}"),
+        )
+            .into_response(),
+    }
+}
+
 fn collect_worktree_summaries() -> Result<WorktreeListResponse> {
     let profiler = WorktreeProfiler::new();
     let overall_start = if profiler.enabled() {
@@ -460,8 +497,7 @@ fn collect_worktree_summaries() -> Result<WorktreeListResponse> {
         None
     };
 
-    let state = profiler
-        .measure_result("state.load", || XlaudeState::load())?;
+    let state = profiler.measure_result("state.load", || XlaudeState::load())?;
 
     let session_profiler = profiler.clone();
     let session_handle = std::thread::spawn(move || collect_external_sessions(&session_profiler));
@@ -472,9 +508,7 @@ fn collect_worktree_summaries() -> Result<WorktreeListResponse> {
         .map(|(id, info)| (id.clone(), info.clone()))
         .collect();
 
-    let external_sessions = session_handle
-        .join()
-        .unwrap_or_else(|_| Vec::new());
+    let external_sessions = session_handle.join().unwrap_or_else(|_| Vec::new());
     let external_sessions = Arc::new(external_sessions);
 
     let mut summaries: Vec<WorktreeSummary> = worktree_entries
@@ -483,12 +517,7 @@ fn collect_worktree_summaries() -> Result<WorktreeListResponse> {
             let profiler = profiler.clone();
             let sessions = external_sessions.clone();
             profiler.measure_worktree(&id, "summarize", || {
-                summarize_single_worktree(
-                    &id,
-                    &info,
-                    sessions.as_ref().as_slice(),
-                    &profiler,
-                )
+                summarize_single_worktree(&id, &info, sessions.as_ref().as_slice(), &profiler)
             })
         })
         .collect();
@@ -506,6 +535,26 @@ fn collect_worktree_summaries() -> Result<WorktreeListResponse> {
     Ok(WorktreeListResponse {
         worktrees: summaries,
     })
+}
+
+fn collect_worktree_processes(worktree_id: &str) -> Result<Option<WorktreeProcessListResponse>> {
+    let state = XlaudeState::load()?;
+    let Some(info) = state.worktrees.get(worktree_id) else {
+        return Ok(None);
+    };
+
+    if !info.path.exists() {
+        warn_once("missing_path", &info.path, || {
+            format!(
+                "⚠️  Worktree path missing, skipping process inspection: {}",
+                info.path.display()
+            )
+        });
+    }
+
+    Ok(Some(WorktreeProcessListResponse {
+        processes: Vec::new(),
+    }))
 }
 
 impl From<agentdev::git::GitFileDiff> for WorktreeFileDiffPayload {
@@ -536,8 +585,7 @@ fn collect_worktree_summary(id: String) -> Result<Option<WorktreeSummary>> {
         None
     };
 
-    let state = profiler
-        .measure_result("state.load", || XlaudeState::load())?;
+    let state = profiler.measure_result("state.load", || XlaudeState::load())?;
     let external_sessions = collect_external_sessions(&profiler);
     let summary = state.worktrees.get(&id).map(|info| {
         profiler.measure_worktree(&id, "summarize", || {
@@ -601,9 +649,7 @@ fn summarize_single_worktree(
     };
 
     let head_commit = if git_ready {
-        match profiler.measure_worktree_result(id, "head_commit", || {
-            head_commit_info(&info.path)
-        }) {
+        match profiler.measure_worktree_result(id, "head_commit", || head_commit_info(&info.path)) {
             Ok(result) => result.map(WorktreeCommitPayload::from),
             Err(err) => {
                 warn_once("head_commit", &info.path, || {
@@ -645,18 +691,19 @@ fn summarize_single_worktree(
         }));
     }
     if path_exists {
-        let claude_sessions = profiler.measure_worktree(id, "sessions.claude", || {
-            get_claude_sessions(&info.path)
-        });
-        sessions.extend(claude_sessions.into_iter().map(|session| {
-            WorktreeSessionSummary {
-                provider: "claude".to_string(),
-                session_id: session.id,
-                last_user_message: session.last_user_message,
-                last_timestamp: session.last_timestamp,
-                user_messages: session.user_messages,
-            }
-        }));
+        let claude_sessions =
+            profiler.measure_worktree(id, "sessions.claude", || get_claude_sessions(&info.path));
+        sessions.extend(
+            claude_sessions
+                .into_iter()
+                .map(|session| WorktreeSessionSummary {
+                    provider: "claude".to_string(),
+                    session_id: session.id,
+                    last_user_message: session.last_user_message,
+                    last_timestamp: session.last_timestamp,
+                    user_messages: session.user_messages,
+                }),
+        );
     }
 
     sessions.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
@@ -731,9 +778,7 @@ pub async fn get_worktree_git_details(
     }
 }
 
-fn collect_worktree_git_details(
-    id: String,
-) -> Result<Option<WorktreeGitDetailsPayload>> {
+fn collect_worktree_git_details(id: String) -> Result<Option<WorktreeGitDetailsPayload>> {
     let state = XlaudeState::load()?;
     let Some(info) = state.worktrees.get(&id) else {
         return Ok(None);
@@ -743,10 +788,7 @@ fn collect_worktree_git_details(
         anyhow::bail!("Worktree path missing: {}", info.path.display());
     }
     if !git_metadata_present(&info.path) {
-        anyhow::bail!(
-            "Worktree missing git metadata: {}",
-            info.path.display()
-        );
+        anyhow::bail!("Worktree missing git metadata: {}", info.path.display());
     }
 
     let breakdown = collect_worktree_diff_breakdown(&info.path)?;

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import MainLayout from '@/components/layout/MainLayout';
 import WorktreeList from '@/components/WorktreeList';
 import WorktreeDetails from '@/components/WorktreeDetails';
+import WorktreeProcesses from '@/components/WorktreeProcesses';
 import { useWorktrees } from '@/hooks/useWorktrees';
 import { WorktreeSummary } from '@/types';
 
@@ -43,13 +44,10 @@ export default function Home() {
         <WorktreeDetails worktree={selectedWorktree} isLoading={isLoading} />
       }
       bottom={
-        <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-gray-500">
-          <p className="font-medium text-gray-600">Process runner coming soon</p>
-          <p className="max-w-md text-xs leading-relaxed text-gray-400">
-            We&apos;re wiring up <code className="rounded bg-gray-100 px-1 py-0.5">agentdev worktree exec</code>{' '}
-            so you can launch and monitor commands without leaving the dashboard.
-          </p>
-        </div>
+        <WorktreeProcesses
+          worktreeId={selectedWorktreeId}
+          worktreeName={selectedWorktree?.name ?? null}
+        />
       }
     />
   );

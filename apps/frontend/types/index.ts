@@ -109,3 +109,25 @@ export interface WorktreeGitDetails {
   unstaged: WorktreeFileDiff[];
   untracked: WorktreeFileDiff[];
 }
+
+export type WorktreeProcessStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'unknown';
+
+export interface WorktreeProcessSummary {
+  id: string;
+  command: string[];
+  status: WorktreeProcessStatus;
+  started_at?: string | null;
+  finished_at?: string | null;
+  exit_code?: number | null;
+  cwd?: string | null;
+  description?: string | null;
+}
+
+export interface WorktreeProcessListResponse {
+  processes: WorktreeProcessSummary[];
+}

@@ -141,18 +141,6 @@ export default function WorktreeDetails({
     </div>
   );
 
-  const renderProcesses = () => (
-    <section className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-600">
-      <p className="font-medium text-gray-700">Command runner on deck</p>
-      <p className="mt-2 leading-relaxed">
-        Soon you will be able to launch <code className="rounded bg-white px-1 py-0.5">pnpm dev</code>{' '}
-        and other ad-hoc commands directly from the dashboard and stream their logs here. For now,
-        continue using <code className="rounded bg-white px-1 py-0.5">agentdev worktree exec</code>{' '}
-        in the terminal.
-      </p>
-    </section>
-  );
-
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 px-6 py-6">
@@ -213,7 +201,6 @@ export default function WorktreeDetails({
             commitsAhead={commitsAhead}
             formatTimestamp={formatTimestamp}
           />
-          {renderProcesses()}
         </div>
       </div>
     </div>
