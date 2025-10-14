@@ -72,13 +72,13 @@
   - Replace direct tmux coupling with a process registry that can handle `spawn`, `stream logs`, `stop`.
   - Keep tmux integration available for legacy flows but do not require it for UI-initiated commands.
 - **State persistence**
-  - Extend `WorktreeInfo` in `AppState` to include git status snapshot, last prompt, last command summary, and cached session metadata.
-  - Rehydrate this state from `state.json` on startup and reconcile against real git worktrees.
+  - Extend persisted `WorktreeInfo` metadata to include git status snapshot, last prompt, last command summary, and cached session details.
+  - Rehydrate this data from `state.json` on startup and reconcile against real git worktrees.
 
 ## Frontend Changes
-- ✅ Replace `useTasks()` with `useWorktrees()` hook fetching the new API and subscribing to WebSocket updates.
+- ✅ Remove legacy task tree; only `useWorktrees()` remains as the source of truth for dashboard data.
 - Rework layout:
-  - ✅ `WorktreeList` component replaces `TaskTree` and now groups worktrees by repository with repo headers, status badges, and refreshed typography for density.
+  - ✅ `WorktreeList` groups worktrees by repository with repo headers, status badges, and refreshed typography for density (task tree deleted).
   - ✅ `DiffPanel` surfaces staged, unstaged, untracked files with inline unified diffs and default expansion of the first change.
   - `SessionList` reading metadata and lazy-loading details.
   - `ProcessPane` showing streaming command output (WebSocket).
@@ -86,9 +86,9 @@
 - Integrate optimistic updates for quick actions (`archive`, `delete`, `merge`).
 
 ## Migration Plan
-1. **Backend schema:** Introduce worktree-focused structs and endpoints while keeping old `/api/tasks` for compatibility until frontend switches. ✅
+1. **Backend schema:** Standardize on worktree-focused structs/endpoints; legacy `/api/tasks` routes are removed. ✅
 2. **Frontend toggle:** Add experimental flag (`NEXT_PUBLIC_ENABLE_WORKTREE_DASHBOARD`) to develop the new layout alongside the old one. ✅ (flag removed after cut-over)
-3. **Cut-over:** Once feature parity is reached, remove task-centric components/endpoints, update docs, and clean unused code. 🔄 Worktree UI is primary; task-centric remnants remain for backwards compatibility.
+3. **Cut-over:** Remove task-centric components/endpoints, update docs, and clean unused code. ✅ Worktree UI is now the only supported flow.
 4. **Follow-ups:** Optional settings page for default commands, integration with summarizer service, search/filter for large worktree lists.
 
 ## Delivery Milestones (E2E Features)

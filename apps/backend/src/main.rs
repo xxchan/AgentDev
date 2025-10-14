@@ -2,49 +2,25 @@ use anyhow::Result;
 use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use rust_embed::RustEmbed;
-use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::{net::TcpListener, sync::RwLock};
+use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 
 mod api;
-mod websocket;
 
 use api::*;
-use websocket::*;
 
 #[derive(RustEmbed)]
 #[folder = "../frontend/out"]
 struct FrontendAssets;
 
-#[derive(Clone)]
-pub struct AppState {
-    pub tasks: Arc<RwLock<HashMap<String, Task>>>,
-}
-
-impl AppState {
-    fn new() -> Result<Self> {
-        let tasks = load_tasks_from_state()?;
-        let task_count = tasks.len();
-        if task_count > 0 {
-            println!("Restored {} task(s) from previous state", task_count);
-        }
-        Ok(Self {
-            tasks: Arc::new(RwLock::new(tasks)),
-        })
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Starting agentdev UI server...");
-
-    let state = AppState::new()?;
 
     let app = Router::new()
         // API routes
@@ -62,21 +38,9 @@ async fn main() -> Result<()> {
             "/api/worktrees/:worktree_id/commands",
             post(post_worktree_command),
         )
-        .route("/api/tasks", get(get_tasks).post(create_task))
-        .route("/api/tasks/:task_id", delete(delete_task))
-        .route(
-            "/api/tasks/:task_id/agents/:agent_id/diff",
-            get(get_agent_diff),
-        )
-        // WebSocket routes
-        .route(
-            "/ws/tasks/:task_id/agents/:agent_id/attach",
-            get(websocket_handler),
-        )
         // Static file serving (fallback to index.html for SPA)
         .fallback(serve_frontend)
-        .layer(CorsLayer::permissive())
-        .with_state(state);
+        .layer(CorsLayer::permissive());
 
     let port = std::env::var("PORT")
         .ok()

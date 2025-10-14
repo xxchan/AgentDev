@@ -1,5 +1,7 @@
 ### **`agentdev ui`：项目需求、任务与实施计划**
 
+> **2025-10 Update:** The legacy task/agent workflow described here has been deprecated. The dashboard now focuses solely on worktree management; the notes below are retained for historical context.
+
 #### **第一部分：最终需求 (The "What")**
 
 **项目目标**
