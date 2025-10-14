@@ -79,8 +79,13 @@ async fn main() -> Result<()> {
         .with_state(state);
 
     let port = std::env::var("PORT")
-        .unwrap_or_else(|_| "3000".to_string())
-        .parse::<u16>()
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .or_else(|| {
+            std::env::var("AGENTDEV_BACKEND_PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+        })
         .unwrap_or(3000);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));

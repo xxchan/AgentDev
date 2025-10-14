@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { WebSocketMessage } from '@/types';
+import { websocketUrl } from '@/lib/api';
 
 interface UseAgentDevSocketOptions {
   taskId?: string;
@@ -43,7 +44,7 @@ export function useAgentDevSocket(options: UseAgentDevSocketOptions = {}) {
     setConnectionState('connecting');
     setError(null);
 
-    const wsUrl = `ws://localhost:3000/ws/tasks/${taskId}/agents/${agentId}/attach`;
+    const wsUrl = websocketUrl(`/ws/tasks/${taskId}/agents/${agentId}/attach`);
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {

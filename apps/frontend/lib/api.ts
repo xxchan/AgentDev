@@ -17,3 +17,20 @@ export function apiUrl(path: string) {
   return `${normalizedBase}${path}`;
 }
 
+export function websocketUrl(path: string) {
+  if (/^wss?:\/\//i.test(path)) {
+    return path;
+  }
+
+  if (!normalizedBase) {
+    return path;
+  }
+
+  const wsBase = normalizedBase.replace(/^http/i, 'ws');
+
+  if (!path.startsWith('/')) {
+    return `${wsBase}/${path}`;
+  }
+
+  return `${wsBase}${path}`;
+}
