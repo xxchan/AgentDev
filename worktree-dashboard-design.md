@@ -18,6 +18,12 @@
 3. **Recall context:** Skim prompts, user intent, and short summaries for each conversation that happened in a worktree.
 4. **Run / resume commands:** Start or resume dev servers/tests in that worktree and monitor their output from the dashboard.
 
+## Current Progress (`feat/ui`)
+- Worktree list sidebar now ships with repository grouping, compact spacing, and clearer status/relative time badges for at-a-glance scanning.
+- Worktree detail view protects against missing commit ids and extends relative time formatting to cover week-level granularity.
+- Hooks migrated to `useWorktrees()` polling the worktree registry API; page wiring selects the first active worktree by default.
+- Process runner placeholder remains static while backend command streaming is under construction.
+
 ## Information Architecture
 - **Sidebar – Worktree List**
   - Rows: `repo-name/worktree-name`
@@ -61,9 +67,9 @@
   - Rehydrate this state from `state.json` on startup and reconcile against real git worktrees.
 
 ## Frontend Changes
-- Replace `useTasks()` with `useWorktrees()` hook fetching the new API and subscribing to WebSocket updates.
+- ✅ Replace `useTasks()` with `useWorktrees()` hook fetching the new API and subscribing to WebSocket updates.
 - Rework layout:
-  - New `WorktreeList` component replacing `TaskTree`.
+  - ✅ `WorktreeList` component replaces `TaskTree` and now groups worktrees by repository with repo headers, status badges, and refreshed typography for density.
   - ✅ `DiffPanel` surfaces staged, unstaged, untracked files with inline unified diffs and default expansion of the first change.
   - `SessionList` reading metadata and lazy-loading details.
   - `ProcessPane` showing streaming command output (WebSocket).
