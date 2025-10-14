@@ -6,8 +6,9 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
 use crate::AppState;
@@ -139,6 +140,19 @@ impl From<HeadCommitInfo> for WorktreeCommitPayload {
     }
 }
 
+static WORKTREE_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn warn_once(operation: &str, path: &Path, render: impl FnOnce() -> String) {
+    let key = format!("{operation}|{}", path.display());
+    let set = WORKTREE_WARNINGS.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = set.lock().expect("worktree warnings mutex poisoned");
+    if guard.insert(key) {
+        let message = render();
+        drop(guard);
+        eprintln!("{message}");
+    }
+}
+
 /// GET /api/worktrees - Get enriched worktree metadata
 pub async fn get_worktrees() -> impl IntoResponse {
     match tokio::task::spawn_blocking(collect_worktree_summaries).await {
@@ -203,30 +217,54 @@ fn collect_worktree_summary(id: String) -> Result<Option<WorktreeSummary>> {
 }
 
 fn summarize_single_worktree(id: &str, info: &WorktreeInfo) -> WorktreeSummary {
-    let git_status = summarize_worktree_status(&info.path, &info.branch)
-        .map(WorktreeGitStatusPayload::from)
-        .map_err(|err| {
-            eprintln!(
-                "⚠️  Failed to inspect git status for {}: {err}",
-                info.path.display()
-            );
-            err
-        })
-        .ok();
+    let path_exists = info.path.exists();
 
-    let head_commit = head_commit_info(&info.path)
-        .map(|opt| opt.map(WorktreeCommitPayload::from))
-        .map_err(|err| {
-            eprintln!(
-                "⚠️  Failed to read last commit for {}: {err}",
+    let git_status = if path_exists {
+        summarize_worktree_status(&info.path, &info.branch)
+            .map(WorktreeGitStatusPayload::from)
+            .map_err(|err| {
+                warn_once("git_status", &info.path, || {
+                    format!(
+                        "⚠️  Failed to inspect git status for {}: {err}",
+                        info.path.display()
+                    )
+                });
+                err
+            })
+            .ok()
+    } else {
+        warn_once("missing_path", &info.path, || {
+            format!(
+                "⚠️  Worktree path missing, skipping git status: {}",
                 info.path.display()
-            );
-            err
-        })
-        .ok()
-        .flatten();
+            )
+        });
+        None
+    };
 
-    let claude_sessions = get_claude_sessions(&info.path);
+    let head_commit = if path_exists {
+        head_commit_info(&info.path)
+            .map(|opt| opt.map(WorktreeCommitPayload::from))
+            .map_err(|err| {
+                warn_once("head_commit", &info.path, || {
+                    format!(
+                        "⚠️  Failed to read last commit for {}: {err}",
+                        info.path.display()
+                    )
+                });
+                err
+            })
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
+    let claude_sessions = if path_exists {
+        get_claude_sessions(&info.path)
+    } else {
+        Vec::new()
+    };
     let sessions: Vec<WorktreeSessionSummary> = claude_sessions
         .into_iter()
         .map(|session| WorktreeSessionSummary {
