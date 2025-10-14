@@ -40,6 +40,7 @@
 - **Git helpers**
   - Async functions to compute staged vs unstaged summaries and produce diffs without blocking.
   - Utility to fetch “last N commits” metadata for the worktree.
+  - Surface actionable diagnostics when git commands fail (full command, exit code, stderr) and skip inspection gracefully when `.git` metadata is missing to avoid log spam.
 - **Session discovery**
   - Scan for session logs in `.agentdev/`, `.claude/`, `.codex/` directories inside the worktree.
   - Extract prompt/user message and optionally call summarizer for longer transcripts (future optimization).
