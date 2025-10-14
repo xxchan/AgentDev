@@ -26,7 +26,7 @@
 - Process pane queries `/api/worktrees/:id/processes`, backed by the CLI process registry, to surface running/completed commands with status and exit codes.
 
 ## Next Focus
-- Add command launch affordance in the UI that triggers the upcoming API and optimistically shows pending processes.
+- Ship a `POST /api/worktrees/:id/commands` endpoint that shells out via the exec handler, then expose an in-dashboard launch dialog with optimistic `pending` entries.
 - Ensure WebSocket wiring (or SSE fallback) streams process logs with graceful degradation when the backend is unavailable.
 - Extend the registry to capture live stdout/stderr tails and expose them through the process API for inline log viewing.
 
