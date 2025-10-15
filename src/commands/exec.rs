@@ -1,8 +1,10 @@
 use std::fs;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use colored::Colorize;
 
 use agentdev::process_registry::{
@@ -75,63 +77,16 @@ pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> 
     })
     .context("Failed to persist process registry after launch")?;
 
-    let status = Command::new(program)
+    let spawn_result = Command::new(program)
         .args(args)
         .current_dir(&worktree.path)
-        .output();
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
 
-    match status {
-        Ok(output) => {
-            let stdout_text = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr_text = String::from_utf8_lossy(&output.stderr).to_string();
-
-            if !stdout_text.is_empty() {
-                print!("{stdout_text}");
-            }
-            if !stderr_text.is_empty() {
-                eprint!("{stderr_text}");
-            }
-
-            let stdout_option = if stdout_text.is_empty() {
-                None
-            } else {
-                Some(stdout_text)
-            };
-            let stderr_option = if stderr_text.is_empty() {
-                None
-            } else {
-                Some(stderr_text)
-            };
-
-            let outcome = if output.status.success() {
-                ProcessStatus::Succeeded
-            } else {
-                ProcessStatus::Failed
-            };
-            ProcessRegistry::mutate(|registry| {
-                registry.update(&process_id, |record| {
-                    record.mark_finished(
-                        outcome,
-                        output.status.code(),
-                        None,
-                        stdout_option.clone(),
-                        stderr_option.clone(),
-                    );
-                })?;
-                registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
-                Ok(())
-            })
-            .context("Failed to persist process registry after completion")?;
-
-            if !output.status.success() {
-                if let Some(code) = output.status.code() {
-                    bail!("Command exited with status {code}");
-                } else {
-                    bail!("Command terminated by signal");
-                }
-            }
-            Ok(())
-        }
+    let mut child = match spawn_result {
+        Ok(child) => child,
         Err(err) => {
             let error_message = format!("Failed to spawn '{program}': {err}");
             ProcessRegistry::mutate(|registry| {
@@ -148,7 +103,123 @@ pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> 
                 Ok(())
             })
             .context("Failed to persist process registry after spawn error")?;
-            Err(err).with_context(|| format!("Failed to spawn '{program}'"))
+            return Err(err).with_context(|| format!("Failed to spawn '{program}'"));
+        }
+    };
+
+    let stdout_handle = child.stdout.take().map(|mut stdout_pipe| {
+        thread::spawn(move || -> Result<Vec<u8>> {
+            let mut captured = Vec::new();
+            let mut buffer = [0u8; 8192];
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            loop {
+                let read = stdout_pipe.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                handle.write_all(&buffer[..read])?;
+                handle.flush()?;
+                captured.extend_from_slice(&buffer[..read]);
+            }
+            Ok(captured)
+        })
+    });
+
+    let stderr_handle = child.stderr.take().map(|mut stderr_pipe| {
+        thread::spawn(move || -> Result<Vec<u8>> {
+            let mut captured = Vec::new();
+            let mut buffer = [0u8; 8192];
+            let stderr = io::stderr();
+            let mut handle = stderr.lock();
+            loop {
+                let read = stderr_pipe.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                handle.write_all(&buffer[..read])?;
+                handle.flush()?;
+                captured.extend_from_slice(&buffer[..read]);
+            }
+            Ok(captured)
+        })
+    });
+
+    let wait_result = child.wait();
+
+    let stdout_bytes = match stdout_handle {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| anyhow!("Stdout capture thread panicked"))??,
+        None => Vec::new(),
+    };
+
+    let stderr_bytes = match stderr_handle {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| anyhow!("Stderr capture thread panicked"))??,
+        None => Vec::new(),
+    };
+
+    let stdout_option = if stdout_bytes.is_empty() {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&stdout_bytes).to_string())
+    };
+    let stderr_option = if stderr_bytes.is_empty() {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&stderr_bytes).to_string())
+    };
+
+    match wait_result {
+        Ok(status) => {
+            let outcome = if status.success() {
+                ProcessStatus::Succeeded
+            } else {
+                ProcessStatus::Failed
+            };
+            ProcessRegistry::mutate(|registry| {
+                registry.update(&process_id, |record| {
+                    record.mark_finished(
+                        outcome,
+                        status.code(),
+                        None,
+                        stdout_option.clone(),
+                        stderr_option.clone(),
+                    );
+                })?;
+                registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+                Ok(())
+            })
+            .context("Failed to persist process registry after completion")?;
+
+            if !status.success() {
+                if let Some(code) = status.code() {
+                    bail!("Command exited with status {code}");
+                } else {
+                    bail!("Command terminated by signal");
+                }
+            }
+            Ok(())
+        }
+        Err(err) => {
+            let error_message = format!("Failed to wait for '{program}': {err}");
+            ProcessRegistry::mutate(|registry| {
+                registry.update(&process_id, |record| {
+                    record.mark_finished(
+                        ProcessStatus::Failed,
+                        None,
+                        Some(error_message.clone()),
+                        stdout_option.clone(),
+                        stderr_option.clone(),
+                    );
+                })?;
+                registry.retain_recent(MAX_PROCESSES_PER_WORKTREE);
+                Ok(())
+            })
+            .context("Failed to persist process registry after wait error")?;
+            Err(err).with_context(|| format!("Failed to wait on '{program}'"))
         }
     }
 }
