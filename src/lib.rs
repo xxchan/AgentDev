@@ -7,6 +7,7 @@ pub mod sessions;
 pub mod state;
 pub mod tmux;
 pub mod utils;
+pub mod web;
 
 // Re-export commonly used types and functions
 pub use config::{load_agent_config, split_cmdline};

@@ -1,29 +1,25 @@
-use anyhow::{anyhow, Context, Result};
-use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse, Json};
+use anyhow::{Result, anyhow};
+use axum::{Json, extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
 use std::thread;
+use std::time::Instant;
 
-use agentdev::{
+use crate::{
     claude::get_claude_sessions,
     git::{
-        collect_worktree_diff_breakdown, commits_since_merge_base, execute_git, get_diff_for_path,
-        get_repo_name, head_commit_info, summarize_worktree_status, update_submodules,
-        CommitsAhead, HeadCommitInfo, WorktreeGitStatus,
+        CommitsAhead, HeadCommitInfo, WorktreeGitStatus, collect_worktree_diff_breakdown,
+        commits_since_merge_base, head_commit_info, summarize_worktree_status,
     },
     process_registry::{
-        canonicalize_cwd,
-        ProcessRecord,
-        ProcessRegistry,
-        ProcessStatus as RegistryProcessStatus,
-        MAX_PROCESSES_PER_WORKTREE,
+        MAX_PROCESSES_PER_WORKTREE, ProcessRecord, ProcessRegistry,
+        ProcessStatus as RegistryProcessStatus, canonicalize_cwd,
     },
-    sessions::{canonicalize as canonicalize_session_path, default_providers, SessionRecord},
+    sessions::{SessionRecord, canonicalize as canonicalize_session_path, default_providers},
     state::{WorktreeInfo, XlaudeState},
 };
 use rayon::prelude::*;
@@ -603,12 +599,12 @@ fn launch_worktree_command(
         Ok(_) => {
             return Ok(LaunchCommandResult::Invalid(
                 "Command is required".to_string(),
-            ))
+            ));
         }
         Err(err) => {
             return Ok(LaunchCommandResult::Invalid(format!(
                 "Invalid command string: {err}"
-            )))
+            )));
         }
     };
 
@@ -655,7 +651,9 @@ fn launch_worktree_command(
         worktree_path,
     );
 
-    Ok(LaunchCommandResult::Success(process_record_to_summary(&record)))
+    Ok(LaunchCommandResult::Success(process_record_to_summary(
+        &record,
+    )))
 }
 
 fn spawn_command_runner(
@@ -665,12 +663,9 @@ fn spawn_command_runner(
     worktree_path: PathBuf,
 ) {
     thread::spawn(move || {
-        if let Err(err) = run_command_runner(
-            &worktree_id,
-            &process_id,
-            &command_tokens,
-            &worktree_path,
-        ) {
+        if let Err(err) =
+            run_command_runner(&worktree_id, &process_id, &command_tokens, &worktree_path)
+        {
             eprintln!(
                 "Failed to execute command for worktree {}: {err}",
                 worktree_id
@@ -783,22 +778,15 @@ fn process_record_to_summary(record: &ProcessRecord) -> WorktreeProcessSummary {
         started_at: Some(record.started_at),
         finished_at: record.finished_at,
         exit_code: record.exit_code,
-        cwd: record
-            .cwd
-            .as_ref()
-        .map(|path| path.display().to_string()),
-        description: record
-            .description
-            .clone()
-            .or_else(|| record.error.clone()),
+        cwd: record.cwd.as_ref().map(|path| path.display().to_string()),
+        description: record.description.clone().or_else(|| record.error.clone()),
         stdout: record.stdout.clone(),
         stderr: record.stderr.clone(),
     }
 }
 
-
-impl From<agentdev::git::GitFileDiff> for WorktreeFileDiffPayload {
-    fn from(value: agentdev::git::GitFileDiff) -> Self {
+impl From<crate::git::GitFileDiff> for WorktreeFileDiffPayload {
+    fn from(value: crate::git::GitFileDiff) -> Self {
         Self {
             path: value.path,
             display_path: value.display_path,
@@ -808,8 +796,8 @@ impl From<agentdev::git::GitFileDiff> for WorktreeFileDiffPayload {
     }
 }
 
-impl From<agentdev::git::CommitDiffInfo> for WorktreeCommitDiffPayload {
-    fn from(value: agentdev::git::CommitDiffInfo) -> Self {
+impl From<crate::git::CommitDiffInfo> for WorktreeCommitDiffPayload {
+    fn from(value: crate::git::CommitDiffInfo) -> Self {
         Self {
             reference: value.reference,
             diff: value.diff,
