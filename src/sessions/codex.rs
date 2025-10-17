@@ -265,6 +265,25 @@ impl CodexParsedEntry {
     fn to_event(&self, include_raw: bool) -> Option<SessionEvent> {
         let (_category, mut actor, entry_category) = self.category_with_actor();
 
+        if matches!(entry_category, CodexEntryCategory::ResponseItem)
+            && actor
+                .as_deref()
+                .is_some_and(|role| role.eq_ignore_ascii_case("user"))
+        {
+            if self
+                .data
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.payload_type.as_deref())
+                .is_some_and(|payload_type| payload_type.eq_ignore_ascii_case("message"))
+            {
+                // Codex emits both a response_item(message, user) and a follow-up
+                // event_msg(user_message) for the same user turn. Skip the redundant
+                // response_item so user messages only appear once in transcripts.
+                return None;
+            }
+        }
+
         let payload_value = self.payload_value();
 
         let text = match entry_category {

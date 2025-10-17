@@ -529,7 +529,7 @@ function SessionGroupSidebar({
           </div>
         </div>
       ) : null}
-      <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-6">
+      <ScrollArea className="flex-1 min-h-0">
         {sections.length === 0 ? (
           <div className="px-3 py-4 text-xs text-muted-foreground/80">
             {isLoading ? 'Collecting session metadata…' : 'No session groups found.'}
@@ -549,17 +549,17 @@ function SessionGroupSidebar({
                       type="button"
                       onClick={() => onSelect(group.id)}
                       className={cn(
-                        'w-full border-l-2 border-transparent px-3 py-2 text-left transition-colors',
+                        'w-full border-l-2 border-transparent pl-3 pr-6 py-2 text-left transition-colors',
                         isSelected
                           ? 'border-primary/70 bg-primary/10 text-foreground'
                           : 'hover:bg-muted',
                       )}
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium text-foreground">
+                      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 gap-y-1">
+                        <span className="min-w-0 break-words text-sm font-medium text-foreground">
                           {group.label}
                         </span>
-                        <span className="text-[0.7rem] text-muted-foreground">
+                        <span className="text-[0.7rem] text-muted-foreground justify-self-end whitespace-nowrap">
                           {group.count}
                         </span>
                       </div>
@@ -616,10 +616,10 @@ function SessionSummaryList({
 
   return (
     <div className="flex h-full flex-1 min-h-0 flex-col rounded-lg border border-border bg-card">
-      <div className="border-b border-border px-4 py-3">
+      <div className="border-b border-border pl-3 pr-4 py-3">
         <div className="flex flex-col gap-2">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div>
+            <div className="min-w-0">
               <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                 {selectedGroup?.label ?? 'Sessions'}
               </h3>
@@ -630,11 +630,11 @@ function SessionSummaryList({
               ) : null}
             </div>
             {providerOptions.length > 1 ? (
-              <div className="flex flex-col gap-1 sm:items-end">
+              <div className="flex min-w-0 flex-col gap-1 sm:items-end sm:text-right">
                 <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground/80">
                   Provider
                 </span>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex min-w-0 max-w-full flex-wrap justify-end gap-2">
                   {providerOptions.map((option) => {
                     const isActive = option.value === selectedProvider;
                     const baseButtonClasses =
@@ -705,9 +705,9 @@ function SessionSummaryList({
           </div>
         </div>
       </div>
-      <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-6">
+      <ScrollArea className="flex-1 min-h-0">
         {sessions.length === 0 ? (
-          <div className="px-4 py-6 text-sm text-muted-foreground/80">
+          <div className="pl-3 pr-4 py-6 text-sm text-muted-foreground/80">
             {isLoading ? 'Loading sessions…' : 'No sessions match your filters.'}
           </div>
         ) : (
@@ -727,7 +727,7 @@ function SessionSummaryList({
               const previewLabel =
                 plainUserMessageCount <= 1 ? 'Only user message' : 'Last user';
               return (
-                <SessionSummaryItem
+            <SessionSummaryItem
                   key={sessionKey}
                   session={session}
                   sessionKey={sessionKey}
@@ -787,7 +787,7 @@ function SessionSummaryItem({
         type="button"
         onClick={handleSelect}
         className={cn(
-          'flex min-w-0 w-full flex-col gap-3 border-l-2 border-transparent px-4 py-3 text-left transition-colors',
+          'flex min-w-0 w-full flex-col gap-3 border-l-2 border-transparent pl-3 pr-4 py-3 text-left transition-colors',
           isSelected
             ? 'border-primary/70 bg-primary/10 text-foreground'
             : 'hover:bg-muted',
@@ -817,7 +817,7 @@ function SessionSummaryItem({
             {session.session_id}
           </span>
         </div>
-        <div className="flex min-w-0 flex-col gap-2 pr-scroll-gutter-lg">
+        <div className="flex min-w-0 flex-col gap-2">
           {showFirstUserPreview && firstUserPreview ? (
             <MessagePreview label="First user" content={firstUserPreview} />
           ) : null}
@@ -1312,9 +1312,9 @@ export default function SessionsPage() {
   );
 
   const main = (
-    <div className="mx-auto flex h-full w-full max-w-6xl flex-1 min-h-0 flex-col gap-6 px-6 py-6">
-      <div className="flex h-full flex-1 min-h-0 flex-col gap-6 lg:flex-row">
-        <div className="flex h-full flex-1 min-h-0 flex-col lg:w-[360px] lg:flex-none">
+    <div className="flex h-full w-full flex-1 min-h-0 flex-col gap-4 px-4 py-6">
+      <div className="flex h-full flex-1 min-h-0 flex-col gap-4 lg:flex-row">
+        <div className="flex h-full flex-1 min-h-0 flex-col lg:flex-[0.45]">
           <SessionSummaryList
             sessions={visibleSessions}
             selectedSessionKey={selectedSessionKey}
@@ -1329,7 +1329,7 @@ export default function SessionsPage() {
             onProviderChange={setSelectedProvider}
           />
         </div>
-        <div className="flex h-full flex-1 min-h-0">
+        <div className="flex h-full flex-1 min-h-0 lg:flex-[0.55]">
           <SessionDetailPanel
             selectedSession={selectedSession}
             sessionItems={detailItems}
@@ -1341,6 +1341,7 @@ export default function SessionsPage() {
     </div>
   );
 
+  
   return (
     <TooltipProvider delayDuration={150}>
       <MainLayout sidebar={sidebar} main={main} />

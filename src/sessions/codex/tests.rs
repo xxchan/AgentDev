@@ -106,3 +106,22 @@ fn real_session_tool_events_snapshot() {
         &snapshot_events(&events),
     );
 }
+
+#[test]
+fn skips_duplicate_user_response_items() {
+    let events = load_fixture("user_message_duplicate.jsonl");
+    assert_eq!(events.len(), 2, "should only emit one user and one assistant event");
+
+    let user_event = &events[0];
+    assert_eq!(user_event.actor.as_deref(), Some("user"));
+    assert_eq!(user_event.category, "user_message");
+    assert_eq!(user_event.text.as_deref(), Some("commit changes"));
+
+    let assistant_event = &events[1];
+    assert_eq!(assistant_event.actor.as_deref(), Some("assistant"));
+    assert_eq!(assistant_event.category, "response_item");
+    assert_eq!(
+        assistant_event.text.as_deref(),
+        Some("I committed the changes.")
+    );
+}

@@ -59,13 +59,6 @@
 }
 
 @layer utilities {
-  .pr-scroll-gutter {
-    padding-right: calc(100vw - 100%);
-  }
-
-  .pr-scroll-gutter-lg {
-    padding-right: calc(100vw - 100% + 1.5rem);
-  }
 }
 
 /* Terminal styling */

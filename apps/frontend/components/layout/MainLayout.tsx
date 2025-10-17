@@ -42,7 +42,7 @@ export default function MainLayout({ sidebar, main, bottom }: MainLayoutProps) {
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left sidebar */}
         <aside className="w-80 min-h-0 border-r border-border bg-card">
-          <ScrollArea className="h-full min-h-0" viewportClassName="pr-6">
+          <ScrollArea className="h-full min-h-0">
             {sidebar}
           </ScrollArea>
         </aside>

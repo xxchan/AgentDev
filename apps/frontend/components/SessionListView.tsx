@@ -90,6 +90,118 @@ function shouldCollapsePlainMessage(message: string) {
   return message.split(/\r?\n/).length > 8;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function coerceString(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  return null;
+}
+
+function coerceNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function extractToolTextOutput(output: unknown): string | null {
+  if (!output) {
+    return null;
+  }
+
+  if (typeof output === "string") {
+    const trimmed = output.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  if (Array.isArray(output)) {
+    const segments = output
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const maybeText = (entry as Record<string, unknown>).text;
+        return typeof maybeText === "string" ? maybeText.trim() : null;
+      })
+      .filter((segment): segment is string => Boolean(segment));
+
+    if (segments.length > 0) {
+      return segments.join("\n\n");
+    }
+  }
+
+  if (isRecord(output) && typeof output.text === "string") {
+    const trimmed = output.text.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  return null;
+}
+
+function renderRawDetails(label: string, value: unknown) {
+  const formatted = formatStructuredValue(value);
+  if (!formatted) {
+    return null;
+  }
+
+  return (
+    <details
+      key={label}
+      className="rounded border border-dashed border-gray-200 bg-white px-3 py-2 text-xs text-gray-600"
+    >
+      <summary className="cursor-pointer select-none text-xs font-semibold uppercase tracking-wide text-gray-600">
+        {label}
+      </summary>
+      <pre className="mt-2 whitespace-pre-wrap break-all text-xs text-gray-700">
+        {formatted}
+      </pre>
+    </details>
+  );
+}
+
+function renderUsageSummary(detail: SessionEvent) {
+  const data = detail.data;
+  const tokenCount = isRecord(data) ? coerceNumber(data.token_count) : null;
+  const cost = isRecord(data) ? coerceString(data.cost) : null;
+  const duration = isRecord(data) ? coerceString(data.duration) : null;
+
+  const items: Array<{ label: string; value: string }> = [];
+  if (tokenCount !== null) {
+    items.push({ label: "Tokens", value: tokenCount.toLocaleString() });
+  }
+  if (cost) {
+    items.push({ label: "Cost", value: cost });
+  }
+  if (duration) {
+    items.push({ label: "Duration", value: duration });
+  }
+
+  return items.length > 0 ? (
+    <dl className="grid grid-cols-1 gap-2 text-xs text-gray-600 sm:grid-cols-3">
+      {items.map((item) => (
+        <div
+          key={item.label}
+          className="rounded border border-gray-200 bg-white/80 px-3 py-2"
+        >
+          <dt className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+            {item.label}
+          </dt>
+          <dd className="mt-1 font-mono text-xs text-gray-800">{item.value}</dd>
+        </div>
+      ))}
+    </dl>
+  ) : null;
+}
+
 function hasRenderableContent(value: unknown): boolean {
   if (value === null || value === undefined) {
     return false;
@@ -152,30 +264,155 @@ function buildToolRender(
     metadataItems.push({ label: "Working dir", value: tool.working_dir });
   }
 
-  const sections: Array<{ key: string; label: string; formatted: string }> = [];
-  if (hasRenderableContent(tool.input)) {
+  const summaryBlocks: ReactNode[] = [];
+  const rawBlocks: ReactNode[] = [];
+  const collapseCandidates: string[] = [];
+  const appendRaw = (label: string, value: unknown) => {
+    const rendered = renderRawDetails(label, value);
+    if (rendered) {
+      rawBlocks.push(rendered);
+    }
+  };
+  let outputHandled = false;
+
+  if (tool.phase === "use" && (tool.name ?? "").trim().toLowerCase() === "task") {
+    if (isRecord(tool.input)) {
+      const description = coerceString(tool.input.description);
+      const subagent = coerceString(tool.input.subagent_name);
+      const prompt = coerceString(tool.input.prompt);
+
+      if (description || subagent) {
+        summaryBlocks.push(
+          <div
+            key="task-summary"
+            className="rounded border border-zinc-200 bg-white/80 px-3 py-2 text-sm text-gray-700"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-medium text-gray-800">{description ?? "Task orchestration"}</p>
+              {subagent ? (
+                <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+                  {subagent}
+                </span>
+              ) : null}
+            </div>
+          </div>,
+        );
+        if (description) {
+          collapseCandidates.push(description);
+        }
+      }
+
+      if (prompt) {
+        summaryBlocks.push(
+          <div key="task-preview" className="rounded border border-zinc-200 bg-white px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+              Prompt preview
+            </p>
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-gray-800">
+              {prompt}
+            </pre>
+          </div>,
+        );
+        collapseCandidates.push(prompt);
+      }
+
+      appendRaw("Raw tool input", tool.input);
+    } else if (hasRenderableContent(tool.input)) {
+      const formatted = formatStructuredValue(tool.input);
+      summaryBlocks.push(
+        <div key="input" className="rounded border border-zinc-200 bg-white px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">Input</p>
+          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-gray-800">
+            {formatted}
+          </pre>
+        </div>,
+      );
+      collapseCandidates.push(formatted);
+    }
+  } else if (hasRenderableContent(tool.input)) {
     const formatted = formatStructuredValue(tool.input);
     if (formatted) {
-      sections.push({ key: "input", label: "Input", formatted });
+      summaryBlocks.push(
+        <div key="input" className="rounded border border-zinc-200 bg-white px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">Input</p>
+          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-gray-800">
+            {formatted}
+          </pre>
+        </div>,
+      );
+      collapseCandidates.push(formatted);
     }
+    appendRaw("Raw tool input", tool.input);
   }
-  if (hasRenderableContent(tool.output)) {
-    const formatted = formatStructuredValue(tool.output);
-    if (formatted) {
-      sections.push({ key: "output", label: "Output", formatted });
-    }
-  }
-  if (hasRenderableContent(tool.extras)) {
-    const formatted = formatStructuredValue(tool.extras);
-    if (formatted) {
-      sections.push({ key: "extras", label: "Extras", formatted });
+
+  if (tool.phase === "result") {
+    const textOutput = extractToolTextOutput(tool.output);
+    if (textOutput) {
+      summaryBlocks.push(
+        <div key="output" className="rounded border border-zinc-200 bg-white px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+            Output
+          </p>
+          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-xs text-gray-800">
+            {textOutput}
+          </pre>
+        </div>,
+      );
+      collapseCandidates.push(textOutput);
+      appendRaw("Raw tool output", tool.output);
+      outputHandled = true;
     }
   }
 
-  if (sections.length === 0) {
+  if (!outputHandled && hasRenderableContent(tool.output)) {
+    const formatted = formatStructuredValue(tool.output);
+    if (formatted) {
+      summaryBlocks.push(
+        <div key="output" className="rounded border border-zinc-200 bg-white px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+            Output
+          </p>
+          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-xs text-gray-800">
+            {formatted}
+          </pre>
+        </div>,
+      );
+      collapseCandidates.push(formatted);
+    }
+    appendRaw("Raw tool output", tool.output);
+    outputHandled = true;
+  }
+
+  if (hasRenderableContent(tool.extras)) {
+    const formatted = formatStructuredValue(tool.extras);
+    if (formatted) {
+      summaryBlocks.push(
+        <div key="extras" className="rounded border border-zinc-200 bg-white px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+            Extras
+          </p>
+          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-gray-800">
+            {formatted}
+          </pre>
+        </div>,
+      );
+      collapseCandidates.push(formatted);
+    }
+    appendRaw("Raw extras", tool.extras);
+  }
+
+  if (summaryBlocks.length === 0) {
     const text = detail.text?.trim();
     if (text) {
-      sections.push({ key: "message", label: "Message", formatted: text });
+      summaryBlocks.push(
+        <div key="message" className="rounded border border-zinc-200 bg-white px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+            Message
+          </p>
+          <pre className="mt-2 whitespace-pre-wrap text-xs text-gray-800">{text}</pre>
+        </div>,
+      );
+      collapseCandidates.push(text);
     }
   }
 
@@ -184,7 +421,6 @@ function buildToolRender(
     tool.phase === "use"
       ? "border-zinc-200 bg-zinc-50 text-zinc-600"
       : "border-zinc-200 bg-zinc-50 text-zinc-600";
-  const collapseCandidates = sections.map((section) => section.formatted);
   const shouldCollapse = collapseCandidates.some((value) => shouldCollapsePlainMessage(value));
   const accentDefault = accent.defaultCollapsed ?? false;
   const collapsible = true;
@@ -231,20 +467,9 @@ function buildToolRender(
           ))}
         </dl>
       ) : null}
-      {sections.map((section) => (
-        <div
-          key={section.key}
-          className="rounded border border-zinc-200 bg-white/80 px-3 py-2"
-        >
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-            {section.label}
-          </p>
-          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-all text-xs text-gray-800">
-            {section.formatted}
-          </pre>
-        </div>
-      ))}
-      {sections.length === 0 ? (
+      {summaryBlocks}
+      {rawBlocks}
+      {summaryBlocks.length === 0 && rawBlocks.length === 0 ? (
         <p className="text-xs italic text-gray-500">No structured tool payload available.</p>
       ) : null}
     </div>
@@ -518,6 +743,7 @@ function buildDefaultRender(
   formatTimestamp: (value?: string | null) => string,
 ): SessionMessageRenderResult {
   const detail = message.detail;
+  const normalizedCategory = detail.category.trim().toLowerCase();
   if (detail.tool) {
     return buildToolRender(detail, detail.tool, index, formatTimestamp);
   }
@@ -534,6 +760,17 @@ function buildDefaultRender(
     const formatted = formatTimestamp(detail.timestamp);
     if (formatted !== "unknown") {
       subtitleParts.push(formatted);
+    }
+  }
+  if (normalizedCategory === "_usage") {
+    if (isRecord(detail.data)) {
+      const totalTokens = coerceNumber(detail.data.token_count);
+      if (totalTokens !== null) {
+        subtitleParts.push(`Tokens ${totalTokens.toLocaleString()}`);
+      }
+    }
+    if (subtitleParts.length === 0 && detail.text) {
+      subtitleParts.push(detail.text);
     }
   }
   const subtitle = subtitleParts.join(" • ");
@@ -638,6 +875,39 @@ function buildDefaultRender(
       : toStartCase(detail.category));
   const title = baseTitle ? `${titlePrefix} · ${baseTitle}` : titlePrefix;
 
+  if (normalizedCategory === "_usage") {
+    const usageSummary = renderUsageSummary(detail);
+    const rawBlocks: ReactNode[] = [];
+    const dataBlock = renderRawDetails("Raw usage payload", detail.data ?? null);
+    if (dataBlock) {
+      rawBlocks.push(dataBlock);
+    }
+    if (detail.text) {
+      const textBlock = renderRawDetails("Raw usage text", detail.text);
+      if (textBlock) {
+        rawBlocks.push(textBlock);
+      }
+    }
+    const accent = getMessageAccent(detail);
+
+    return {
+      title,
+      subtitle,
+      content: (
+        <div className="space-y-3">
+          {usageSummary ?? (
+            <p className="text-xs text-gray-500">No usage metrics available.</p>
+          )}
+          {rawBlocks}
+        </div>
+      ),
+      collapsible: true,
+      defaultCollapsed: true,
+      containerClassName: accent.container,
+      titleClassName: accent.title,
+    };
+  }
+
   const isStructuredFallback =
     !detail.text && !detail.summary_text && Boolean(detail.data);
 
@@ -733,7 +1003,7 @@ export default function SessionListView({
           <span className="text-xs text-gray-400">{sessions.length} total</span>
         </div>
       </header>
-      <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-6">
+      <ScrollArea className="flex-1 min-h-0">
         {sessions.length > 0 ? (
           <ul className="divide-y divide-gray-100">
           {sessions.map((session) => {
