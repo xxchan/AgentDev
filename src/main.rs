@@ -135,6 +135,9 @@ enum Commands {
         /// Port to run the web server on
         #[arg(long, default_value = "3000")]
         port: u16,
+        /// Host to bind the web server to (e.g. 0.0.0.0 to allow remote access)
+        #[arg(long)]
+        host: Option<std::net::IpAddr>,
     },
 }
 
@@ -179,7 +182,7 @@ fn main() -> Result<()> {
             name,
         } => handle_start(prompt, agents, name),
         Commands::DeleteTask { task_name } => handle_delete_task_cli(task_name),
-        Commands::Ui { port } => handle_ui(port),
+        Commands::Ui { port, host } => handle_ui(port, host),
         // Backward-compatible routing
         Commands::Create { name, agent } => handle_create(name, agent),
         Commands::Open { name, agent } => handle_open(name, agent),

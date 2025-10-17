@@ -51,9 +51,11 @@ tmux attach -t agentdev_dev   # 查看日志或交互，CTRL+B D 可分离
 
 - 后端监听 `http://localhost:3000`，前端 dev server 监听 `http://localhost:3100`，UI 内发往 `/api/*` 的请求会自动代理到后端。
 - 可通过环境变量调整端口或代理地址：
+  - `AGENTDEV_BACKEND_HOST`（默认 `127.0.0.1`）
   - `AGENTDEV_BACKEND_PORT`（默认 `3000`）
   - `AGENTDEV_FRONTEND_PORT`（默认 `3100`）
   - `AGENTDEV_API_BASE`（默认 `http://localhost:<AGENTDEV_BACKEND_PORT>`）
+- 若需要对外暴露，请使用 `agentdev ui --host 0.0.0.0`（或设置 `AGENTDEV_BACKEND_HOST`）并自行做好网络与鉴权防护。
 - 退出时记得 `tmux kill-session -t agentdev_dev` 或在 tmux 内 `exit`，避免残留进程占用端口。
 
 生产构建仍然使用静态导出：

@@ -4,7 +4,7 @@
 
 每次完成一轮改动，在向用户同步结果前必须先“自验证”：
 
-- **把系统真实跑起来。** 至少启动一次 UI/后端，务必用后台方式运行：推荐在项目根执行 `pnpm run dev:ui`，脚本会创建 `agentdev_dev` tmux 会话，左侧 pane 运行 `cargo run --bin agentdev-ui`，右侧 pane 运行 `pnpm run dev`（端口默认 3100，命中 `/api/*` 时自动转发到 3000 后端）。需要手动查看日志时 `tmux attach -t agentdev_dev`，收尾时 `tmux kill-session -t agentdev_dev`。如需自定义端口，可设置 `AGENTDEV_BACKEND_PORT` / `AGENTDEV_FRONTEND_PORT` 环境变量。确认新增日志（如 git 报错）包含完整的命令、退出码和 stderr 摘要后，再恢复环境。
+- **把系统真实跑起来。** 至少启动一次 UI/后端，务必用后台方式运行：推荐在项目根执行 `pnpm run dev:ui`，脚本会创建 `agentdev_dev` tmux 会话，左侧 pane 运行 `cargo run --bin agentdev-ui`，右侧 pane 运行 `pnpm run dev`（端口默认 3100，命中 `/api/*` 时自动转发到 3000 后端）。需要手动查看日志时 `tmux attach -t agentdev_dev`，收尾时 `tmux kill-session -t agentdev_dev`。如需自定义端口，可设置 `AGENTDEV_BACKEND_HOST` / `AGENTDEV_BACKEND_PORT` / `AGENTDEV_FRONTEND_PORT` 环境变量。确认新增日志（如 git 报错）包含完整的命令、退出码和 stderr 摘要后，再恢复环境。
 - **走完核心交互。** 用 `curl`、浏览器、Chrome MCP 等方式命中关键 API/页面，确认行为符合预期且没有新增告警。
 - **回归自动化校验。** 运行与改动相关的测试/构建（如 `cargo test --lib`、`pnpm run build:frontend`）。若加了新脚本，也要记得纳入验证。
 - **清理调试残留。** 结束前停掉后台进程、还原环境，避免影响下一次迭代。

@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use anyhow::Result;
 use axum::{
@@ -21,6 +21,9 @@ pub struct ServerOptions {
     /// Override the port used for the HTTP server. When `None`, fall back to
     /// the `PORT` or `AGENTDEV_BACKEND_PORT` environment variables, then 3000.
     pub port: Option<u16>,
+    /// Override the host interface the HTTP server binds to. When `None`, fall
+    /// back to `AGENTDEV_BACKEND_HOST`, then `HOST`, and finally 127.0.0.1.
+    pub host: Option<IpAddr>,
     /// Whether to attempt opening the default browser after the server starts.
     pub auto_open_browser: bool,
 }
@@ -29,13 +32,15 @@ impl Default for ServerOptions {
     fn default() -> Self {
         Self {
             port: None,
+            host: None,
             auto_open_browser: true,
         }
     }
 }
 
 impl ServerOptions {
-    /// Construct options using environment defaults (PORT/AGENTDEV_BACKEND_PORT).
+    /// Construct options using environment defaults (PORT/AGENTDEV_BACKEND_PORT,
+    /// AGENTDEV_BACKEND_HOST/HOST).
     pub fn from_env() -> Self {
         let port = std::env::var("PORT")
             .ok()
@@ -45,8 +50,10 @@ impl ServerOptions {
                     .ok()
                     .and_then(|value| value.parse::<u16>().ok())
             });
+        let host = host_from_env();
         Self {
             port,
+            host,
             ..Default::default()
         }
     }
@@ -54,6 +61,12 @@ impl ServerOptions {
     /// Return a copy of the options with the port overridden.
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = Some(port);
+        self
+    }
+
+    /// Return a copy of the options with the host overridden.
+    pub fn with_host(mut self, host: IpAddr) -> Self {
+        self.host = Some(host);
         self
     }
 
@@ -94,15 +107,24 @@ async fn run_async(options: ServerOptions) -> Result<()> {
                 .and_then(|value| value.parse::<u16>().ok())
         })
         .unwrap_or(3000);
-
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let host = options
+        .host
+        .or_else(host_from_env)
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let addr = SocketAddr::from((host, port));
     let listener = TcpListener::bind(addr).await?;
 
-    println!("🚀 AgentDev UI server running on http://localhost:{port}");
+    println!(
+        "🚀 AgentDev UI server running on http://{}:{port}",
+        format_host_for_display(host)
+    );
 
     if options.auto_open_browser {
-        if let Err(e) = open_browser(port) {
-            println!("Failed to open browser: {e}. Please manually visit http://localhost:{port}");
+        if let Err(e) = open_browser(host, port) {
+            println!(
+                "Failed to open browser: {e}. Please manually visit http://{}:{port}",
+                format_host_for_display(host)
+            );
         }
     }
 
@@ -142,8 +164,35 @@ async fn serve_frontend(uri: axum::http::Uri) -> impl IntoResponse {
     frontend::serve(uri)
 }
 
-fn open_browser(port: u16) -> Result<()> {
-    let url = format!("http://localhost:{port}");
+fn host_from_env() -> Option<IpAddr> {
+    parse_env_ip("AGENTDEV_BACKEND_HOST").or_else(|| parse_env_ip("HOST"))
+}
+
+fn parse_env_ip(key: &str) -> Option<IpAddr> {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<IpAddr>().ok())
+}
+
+fn format_host_for_display(host: IpAddr) -> String {
+    match host {
+        IpAddr::V6(addr) => format!("[{addr}]"),
+        IpAddr::V4(addr) => addr.to_string(),
+    }
+}
+
+fn format_host_for_browser(host: IpAddr) -> String {
+    match host {
+        IpAddr::V4(addr) if addr.is_unspecified() => Ipv4Addr::LOCALHOST.to_string(),
+        IpAddr::V6(addr) if addr.is_unspecified() => format!("[{}]", Ipv6Addr::LOCALHOST),
+        IpAddr::V6(addr) => format!("[{addr}]"),
+        IpAddr::V4(addr) => addr.to_string(),
+    }
+}
+
+fn open_browser(host: IpAddr, port: u16) -> Result<()> {
+    let url_host = format_host_for_browser(host);
+    let url = format!("http://{url_host}:{port}");
 
     #[cfg(target_os = "macos")]
     std::process::Command::new("open").arg(&url).spawn()?;
