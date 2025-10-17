@@ -1,7 +1,11 @@
 "use client";
 
 import { ReactNode, useState } from "react";
+import type { SessionEvent } from "@/types";
 import { ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/24/outline";
+import { cn } from "@/lib/utils";
+import { getProviderBadgeClasses } from "@/lib/providers";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 type SpecialMessageType =
   | "user_instructions"
@@ -45,6 +49,34 @@ type SpecialMessage =
 type ParsedUserMessage =
   | { kind: "special"; message: SpecialMessage }
   | { kind: "default"; text: string; shouldCollapse: boolean };
+
+export interface SessionListMessage {
+  key: string;
+  detail: SessionEvent;
+}
+
+export interface SessionMessageRenderResult {
+  header?: ReactNode;
+  title?: ReactNode;
+  subtitle?: ReactNode;
+  content: ReactNode;
+  collapsible: boolean;
+  defaultCollapsed: boolean;
+  containerClassName?: string;
+  titleClassName?: string;
+}
+
+export interface SessionMessageRendererContext {
+  index: number;
+  session: SessionListItem;
+  formatTimestamp: (value?: string | null) => string;
+  defaultRender: () => SessionMessageRenderResult;
+}
+
+export type SessionMessageRenderer = (
+  message: SessionListMessage,
+  context: SessionMessageRendererContext,
+) => SessionMessageRenderResult | null;
 
 function shouldCollapsePlainMessage(message: string) {
   if (!message) {
@@ -184,14 +216,241 @@ function getSpecialMessageContainerClasses(type: SpecialMessageType) {
       return "border-gray-200 bg-gray-50";
   }
 }
+
+function getSpecialMessageTitleClass(message: SpecialMessage): string {
+  switch (message.accent) {
+    case "indigo":
+      return "text-indigo-700";
+    case "emerald":
+      return "text-emerald-700";
+    case "blue":
+      return "text-blue-700";
+    default:
+      return "text-gray-600";
+  }
+}
+
+interface MessageAccent {
+  container: string;
+  title: string;
+  defaultCollapsed?: boolean;
+}
+
+const DEFAULT_MESSAGE_ACCENT: MessageAccent = {
+  container: "border-gray-200 bg-gray-50",
+  title: "text-gray-600",
+  defaultCollapsed: false,
+};
+
+function getMessageAccent(detail: SessionEvent): MessageAccent {
+  const actor = detail.actor?.trim().toLowerCase();
+  if (actor) {
+    switch (actor) {
+      case "user":
+        return {
+          container: "border-sky-200 bg-sky-50",
+          title: "text-sky-700",
+          defaultCollapsed: false,
+        };
+      case "assistant":
+        return {
+          container: "border-violet-200 bg-violet-50",
+          title: "text-violet-700",
+          defaultCollapsed: false,
+        };
+      case "system":
+        return {
+          container: "border-amber-200 bg-amber-50",
+          title: "text-amber-700",
+          defaultCollapsed: false,
+        };
+    }
+  }
+
+  const category = detail.category.trim().toLowerCase();
+  switch (category) {
+    case "session_meta":
+      return {
+        container: "border-slate-300 bg-slate-50",
+        title: "text-slate-700",
+        defaultCollapsed: true,
+      };
+    case "_checkpoint":
+      return {
+        container: "border-gray-200 bg-gray-50",
+        title: "text-gray-600",
+        defaultCollapsed: true,
+      };
+    case "_usage":
+      return {
+        container: "border-gray-200 bg-gray-50",
+        title: "text-gray-600",
+        defaultCollapsed: true,
+      };
+    case "tool_use":
+      return {
+        container: "border-blue-200 bg-blue-50",
+        title: "text-blue-700",
+        defaultCollapsed: true,
+      };
+    case "tool_result":
+      return {
+        container: "border-cyan-200 bg-cyan-50",
+        title: "text-cyan-700",
+        defaultCollapsed: true,
+      };
+    case "response_item":
+      return {
+        container: "border-purple-200 bg-purple-50",
+        title: "text-purple-700",
+        defaultCollapsed: false,
+      };
+    case "assistant_message":
+      return {
+        container: "border-violet-200 bg-violet-50",
+        title: "text-violet-700",
+        defaultCollapsed: false,
+      };
+    case "user_message":
+      return {
+        container: "border-sky-200 bg-sky-50",
+        title: "text-sky-700",
+        defaultCollapsed: false,
+      };
+    default:
+      return DEFAULT_MESSAGE_ACCENT;
+  }
+}
+
+function buildDefaultRender(
+  message: SessionListMessage,
+  index: number,
+  formatTimestamp: (value?: string | null) => string,
+): SessionMessageRenderResult {
+  const detail = message.detail;
+  const baseText =
+    detail.text ??
+    detail.summary_text ??
+    (detail.data ? JSON.stringify(detail.data, null, 2) : "");
+  const parsed = baseText
+    ? parseUserMessage(baseText)
+    : { kind: "default" as const, text: "", shouldCollapse: false };
+
+  const subtitleParts: string[] = [];
+  if (detail.timestamp) {
+    const formatted = formatTimestamp(detail.timestamp);
+    if (formatted !== "unknown") {
+      subtitleParts.push(formatted);
+    }
+  }
+  const subtitle = subtitleParts.join(" • ");
+
+  if (parsed.kind === "special") {
+    const special = parsed.message;
+    const titlePrefix = `#${index + 1}`;
+    const baseTitle = detail.label ?? special.title;
+    const composedTitle = baseTitle ? `${titlePrefix} · ${baseTitle}` : titlePrefix;
+    return {
+      title: composedTitle,
+      subtitle,
+      content: (
+        <>
+          {special.type === "user_instructions" ? (
+            <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-sm text-gray-800">
+              {special.body}
+            </pre>
+          ) : null}
+          {special.type === "environment_context" ? (
+            <dl className="mt-3 grid grid-cols-1 gap-2 text-sm text-gray-700 sm:grid-cols-2">
+              {special.entries.map((entry) => (
+                <div
+                  key={entry.key}
+                  className="rounded border border-emerald-200/60 bg-white/70 px-3 py-2"
+                >
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                    {entry.label}
+                  </dt>
+                  <dd className="mt-1 break-all font-mono text-xs text-gray-800">
+                    {entry.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {special.type === "user_action" ? (
+            <div className="mt-2 space-y-3">
+              {special.sections.map((section) => (
+                <div
+                  key={section.key}
+                  className="rounded border border-blue-200 bg-white/80 px-3 py-2"
+                >
+                  <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                    {section.label}
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">
+                    {section.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ),
+      collapsible: special.collapsible,
+      defaultCollapsed: special.defaultCollapsed,
+      containerClassName: getSpecialMessageContainerClasses(special.type),
+      titleClassName: getSpecialMessageTitleClass(special),
+    };
+  }
+
+  const titlePrefix = `#${index + 1}`;
+  const baseTitle =
+    detail.label ??
+    (detail.actor && detail.actor.trim().length > 0
+      ? toStartCase(detail.actor)
+      : toStartCase(detail.category));
+  const title = baseTitle ? `${titlePrefix} · ${baseTitle}` : titlePrefix;
+
+  const isStructuredFallback =
+    !detail.text && !detail.summary_text && Boolean(detail.data);
+
+  const content = baseText ? (
+    isStructuredFallback ? (
+      <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-sm text-gray-800">
+        {baseText}
+      </pre>
+    ) : (
+      <p className="mt-2 whitespace-pre-wrap text-sm text-gray-700">{baseText}</p>
+    )
+  ) : (
+    <p className="mt-2 text-xs italic text-gray-500">No message content.</p>
+  );
+
+  const accent = getMessageAccent(detail);
+  const shouldCollapse = shouldCollapsePlainMessage(baseText);
+  const accentDefaultCollapsed = accent.defaultCollapsed ?? false;
+  const collapsible = shouldCollapse || accentDefaultCollapsed;
+  const defaultCollapsed = accentDefaultCollapsed || shouldCollapse;
+
+  return {
+    title,
+    subtitle,
+    content,
+    collapsible,
+    defaultCollapsed,
+    containerClassName: accent.container,
+    titleClassName: accent.title,
+  };
+}
 export interface SessionListItem {
   sessionKey: string;
   provider: string;
   sessionId: string;
   lastTimestamp?: string | null;
-  userMessages: string[];
+  messages: SessionListMessage[];
   metadata?: ReactNode;
   headerActions?: ReactNode;
+  emptyState?: ReactNode;
 }
 
 interface SessionListViewProps {
@@ -200,6 +459,8 @@ interface SessionListViewProps {
   sessions: SessionListItem[];
   formatTimestamp: (value?: string | null) => string;
   emptyState?: ReactNode;
+  toolbar?: ReactNode;
+  renderMessage?: SessionMessageRenderer;
 }
 
 export default function SessionListView({
@@ -208,6 +469,8 @@ export default function SessionListView({
   sessions,
   formatTimestamp,
   emptyState,
+  toolbar,
+  renderMessage,
 }: SessionListViewProps) {
   const [expandedSessionMessages, setExpandedSessionMessages] = useState<
     Record<string, boolean>
@@ -228,8 +491,8 @@ export default function SessionListView({
   };
 
   return (
-    <section className="rounded-lg border border-gray-200 bg-white">
-      <header className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+    <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-gray-200 bg-white">
+      <header className="flex shrink-0 flex-col gap-2 border-b border-gray-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
             {title}
@@ -238,10 +501,14 @@ export default function SessionListView({
             <p className="text-xs text-gray-500">{description}</p>
           ) : null}
         </div>
-        <span className="text-xs text-gray-400">{sessions.length} total</span>
+        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-3">
+          {toolbar ? <div className="flex items-center gap-2">{toolbar}</div> : null}
+          <span className="text-xs text-gray-400">{sessions.length} total</span>
+        </div>
       </header>
-      {sessions.length > 0 ? (
-        <ul className="divide-y divide-gray-100">
+      <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-4">
+        {sessions.length > 0 ? (
+          <ul className="divide-y divide-gray-100">
           {sessions.map((session) => {
             const sessionKey = session.sessionKey;
             const isCollapsed = collapsedSessions[sessionKey] ?? false;
@@ -277,7 +544,12 @@ export default function SessionListView({
                         {isCollapsed ? "Expand session" : "Collapse session"}
                       </span>
                     </button>
-                    <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-blue-700">
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-xs font-medium uppercase tracking-wide",
+                        getProviderBadgeClasses(session.provider),
+                      )}
+                    >
                       {session.provider}
                     </span>
                     <span className="text-xs text-gray-500">
@@ -301,39 +573,52 @@ export default function SessionListView({
                         {session.metadata}
                       </div>
                     ) : null}
-                    {session.userMessages.length > 0 ? (
+                    {session.messages.length > 0 ? (
                       <ol className="space-y-2">
-                        {session.userMessages.map((message, messageIdx) => {
-                          const messageKey = `${session.sessionKey}-${messageIdx}`;
-                          const parsed = parseUserMessage(message);
-                          const defaultExpanded =
-                            parsed.kind === "special"
-                              ? !parsed.message.defaultCollapsed
-                              : !parsed.shouldCollapse;
-                          const showToggle =
-                            parsed.kind === "special"
-                              ? parsed.message.collapsible
-                              : parsed.shouldCollapse;
-                          const storedExpansion =
-                            expandedSessionMessages[messageKey];
+                        {session.messages.map((message, messageIdx) => {
+                          const messageStateKey = `${session.sessionKey}:${message.key}`;
+                          const baseRender = buildDefaultRender(
+                            message,
+                            messageIdx,
+                            formatTimestamp,
+                          );
+                          const customRender = renderMessage
+                            ? renderMessage(message, {
+                                index: messageIdx,
+                                session,
+                                formatTimestamp,
+                                defaultRender: () => baseRender,
+                              })
+                            : null;
+                          const rendered = customRender ?? baseRender;
+                          const showToggle = rendered.collapsible;
+                          const defaultExpanded = !rendered.defaultCollapsed;
+                          const storedExpansion = expandedSessionMessages[messageStateKey];
                           const isExpanded = showToggle
                             ? storedExpansion ?? defaultExpanded
                             : true;
                           const handleToggle = () => {
-                            toggleSessionMessage(messageKey, defaultExpanded);
+                            toggleSessionMessage(messageStateKey, defaultExpanded);
                           };
 
-                          const headerContent = (
+                          const headerContent = rendered.header ?? (
                             <div className="flex w-full items-center justify-between gap-2">
                               <div className="flex flex-col">
-                                <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-                                  {parsed.kind === "special"
-                                    ? parsed.message.title
-                                    : "User Message"}
-                                </span>
-                                <span className="text-xs text-gray-500">
-                                  Message {messageIdx + 1}
-                                </span>
+                                {rendered.title ? (
+                                  <span
+                                    className={cn(
+                                      "text-xs font-semibold uppercase tracking-wide",
+                                      rendered.titleClassName ?? "text-gray-600",
+                                    )}
+                                  >
+                                    {rendered.title}
+                                  </span>
+                                ) : null}
+                                {rendered.subtitle ? (
+                                  <span className="text-xs text-gray-500">
+                                    {rendered.subtitle}
+                                  </span>
+                                ) : null}
                               </div>
                               {showToggle ? (
                                 <span className="text-xs text-gray-400">
@@ -345,13 +630,10 @@ export default function SessionListView({
 
                           return (
                             <li
-                              key={messageKey}
+                              key={message.key}
                               className={`overflow-hidden rounded-md border ${
-                                parsed.kind === "special"
-                                  ? getSpecialMessageContainerClasses(
-                                      parsed.message.type,
-                                    )
-                                  : "border-gray-200 bg-gray-50"
+                                rendered.containerClassName ??
+                                "border-gray-200 bg-gray-50"
                               }`}
                             >
                               {showToggle ? (
@@ -369,64 +651,16 @@ export default function SessionListView({
                                 </div>
                               )}
                               {(!showToggle || isExpanded) && (
-                                <div className="px-3 pb-3">
-                                  {parsed.kind === "special" ? (
-                                    <>
-                                      {parsed.message.type === "user_instructions" ? (
-                                        <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-sm text-gray-800">
-                                          {parsed.message.body}
-                                        </pre>
-                                      ) : null}
-                                      {parsed.message.type === "environment_context" ? (
-                                        <dl className="mt-3 grid grid-cols-1 gap-2 text-sm text-gray-700 sm:grid-cols-2">
-                                          {parsed.message.entries.map((entry) => (
-                                            <div
-                                              key={entry.key}
-                                              className="rounded border border-emerald-200/60 bg-white/70 px-3 py-2"
-                                            >
-                                              <dt className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                                                {entry.label}
-                                              </dt>
-                                              <dd className="mt-1 break-all font-mono text-xs text-gray-800">
-                                                {entry.value}
-                                              </dd>
-                                            </div>
-                                          ))}
-                                        </dl>
-                                      ) : null}
-                                      {parsed.message.type === "user_action" ? (
-                                        <div className="mt-2 space-y-3">
-                                          {parsed.message.sections.map((section) => (
-                                            <div
-                                              key={section.key}
-                                              className="rounded border border-blue-200 bg-white/80 px-3 py-2"
-                                            >
-                                              <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
-                                                {section.label}
-                                              </p>
-                                              <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">
-                                                {section.value}
-                                              </p>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      ) : null}
-                                    </>
-                                  ) : (
-                                    <p className="mt-2 whitespace-pre-wrap text-sm text-gray-700">
-                                      {message}
-                                    </p>
-                                  )}
-                                </div>
+                                <div className="px-3 pb-3">{rendered.content}</div>
                               )}
                             </li>
                           );
                         })}
                       </ol>
                     ) : (
-                      <p className="text-sm text-gray-500">
-                        No user messages recorded
-                      </p>
+                      <div className="rounded-md border border-dashed border-gray-200 bg-gray-50 px-3 py-6 text-center text-xs text-gray-500">
+                        {session.emptyState ?? "No messages captured yet."}
+                      </div>
                     )}
                   </div>
                 ) : null}
@@ -438,7 +672,8 @@ export default function SessionListView({
         <div className="px-4 py-6 text-sm text-gray-500">
           {emptyState ?? "No sessions available."}
         </div>
-      )}
+        )}
+      </ScrollArea>
     </section>
   );
 }

@@ -1,5 +1,10 @@
 use anyhow::{Result, anyhow};
-use axum::{Json, extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::{Path as AxumPath, Query},
+    http::StatusCode,
+    response::IntoResponse,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -10,7 +15,6 @@ use std::thread;
 use std::time::Instant;
 
 use crate::{
-    claude::get_claude_sessions,
     git::{
         CommitsAhead, HeadCommitInfo, WorktreeGitStatus, collect_worktree_diff_breakdown,
         commits_since_merge_base, head_commit_info, summarize_worktree_status,
@@ -19,7 +23,7 @@ use crate::{
         MAX_PROCESSES_PER_WORKTREE, ProcessRecord, ProcessRegistry,
         ProcessStatus as RegistryProcessStatus, canonicalize_cwd,
     },
-    sessions::{SessionRecord, canonicalize as canonicalize_session_path, default_providers},
+    sessions::{SessionEvent, SessionRecord, canonicalize as canonicalize_session_path, default_providers},
     state::{WorktreeInfo, XlaudeState},
 };
 use rayon::prelude::*;
@@ -149,6 +153,49 @@ pub struct WorktreeListResponse {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SessionListResponse {
     pub sessions: Vec<SessionSummaryPayload>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderSessionsPayload>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ProviderSessionsPayload {
+    pub provider: String,
+    pub session_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionDetailMode {
+    UserOnly,
+    Full,
+}
+
+impl Default for SessionDetailMode {
+    fn default() -> Self {
+        SessionDetailMode::Full
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct SessionDetailQuery {
+    #[serde(default)]
+    pub mode: Option<SessionDetailMode>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionDetailPayload {
+    pub provider: String,
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    pub mode: SessionDetailMode,
+    pub events: Vec<SessionEvent>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -270,6 +317,64 @@ fn git_metadata_present(path: &Path) -> bool {
 struct NormalizedSession {
     record: SessionRecord,
     canonical_dir: Option<PathBuf>,
+}
+
+fn load_session_detail(
+    provider_name: String,
+    session_id: String,
+    mode: SessionDetailMode,
+) -> Result<Option<SessionDetailPayload>> {
+    let requested = provider_name.to_lowercase();
+    for provider in default_providers() {
+        if !provider.name().eq_ignore_ascii_case(&requested) {
+            continue;
+        }
+
+        let records = provider.list_sessions()?;
+        for record in records {
+            if record.id == session_id {
+                let events = match mode {
+                    SessionDetailMode::Full => provider.load_session_events(&record)?,
+                    SessionDetailMode::UserOnly => user_messages_to_events(&record),
+                };
+
+                let working_dir = record
+                    .working_dir
+                    .as_ref()
+                    .map(|dir| dir.display().to_string());
+
+                return Ok(Some(SessionDetailPayload {
+                    provider: provider.name().to_string(),
+                    session_id: record.id.clone(),
+                    last_timestamp: record.last_timestamp,
+                    working_dir,
+                    mode,
+                    events,
+                }));
+            }
+        }
+
+        return Ok(None);
+    }
+    Ok(None)
+}
+
+fn user_messages_to_events(record: &SessionRecord) -> Vec<SessionEvent> {
+    record
+        .user_messages
+        .iter()
+        .enumerate()
+        .map(|(_, text)| SessionEvent {
+            actor: Some("user".to_string()),
+            category: "user".to_string(),
+            label: Some("User".to_string()),
+            text: Some(text.clone()),
+            summary_text: Some(text.clone()),
+            data: None,
+            timestamp: None,
+            raw: None,
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -445,6 +550,29 @@ pub async fn get_sessions() -> impl IntoResponse {
         Err(join_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Session collection task failed: {join_err}"),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/sessions/:provider/:session_id - Fetch transcript details for a session
+pub async fn get_session_detail(
+    AxumPath((provider, session_id)): AxumPath<(String, String)>,
+    Query(query): Query<SessionDetailQuery>,
+) -> impl IntoResponse {
+    let mode = query.mode.unwrap_or_default();
+    match tokio::task::spawn_blocking(move || load_session_detail(provider, session_id, mode)).await
+    {
+        Ok(Ok(Some(detail))) => Json(detail).into_response(),
+        Ok(Ok(None)) => (StatusCode::NOT_FOUND, "Session not found".to_string()).into_response(),
+        Ok(Err(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to load session detail: {err}"),
+        )
+            .into_response(),
+        Err(join_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Session detail task failed: {join_err}"),
         )
             .into_response(),
     }
@@ -643,32 +771,41 @@ fn collect_all_sessions() -> Result<SessionListResponse> {
         })
         .collect();
 
-    for locator in &locators {
-        let claude_sessions =
-            profiler.measure_worktree(locator.id.as_str(), "sessions.claude_all", || {
-                get_claude_sessions(&locator.info.path)
-            });
-        for session in claude_sessions {
-            sessions.push(SessionSummaryPayload {
-                provider: "claude".to_string(),
-                session_id: session.id,
-                last_user_message: session.last_user_message,
-                last_timestamp: session.last_timestamp,
-                user_messages: session.user_messages,
-                worktree_id: Some(locator.id.clone()),
-                worktree_name: Some(locator.info.name.clone()),
-                repo_name: Some(locator.info.repo_name.clone()),
-                branch: Some(locator.info.branch.clone()),
-                working_dir: Some(locator.info.path.display().to_string()),
-            });
-        }
-    }
-
     sessions.sort_by(|a, b| {
         b.last_timestamp
             .cmp(&a.last_timestamp)
             .then_with(|| a.provider.cmp(&b.provider))
             .then_with(|| a.session_id.cmp(&b.session_id))
+    });
+
+    let mut provider_map: std::collections::BTreeMap<String, ProviderSessionsPayload> =
+        std::collections::BTreeMap::new();
+    for session in &sessions {
+        let entry = provider_map
+            .entry(session.provider.clone())
+            .or_insert_with(|| ProviderSessionsPayload {
+                provider: session.provider.clone(),
+                session_count: 0,
+                session_ids: Vec::new(),
+                latest_timestamp: None,
+            });
+        entry.session_count += 1;
+        entry.session_ids.push(session.session_id.clone());
+        if let Some(candidate) = session.last_timestamp {
+            if entry
+                .latest_timestamp
+                .map_or(true, |current| candidate > current)
+            {
+                entry.latest_timestamp = Some(candidate);
+            }
+        }
+    }
+
+    let mut providers: Vec<ProviderSessionsPayload> = provider_map.into_values().collect();
+    providers.sort_by(|a, b| {
+        b.session_count
+            .cmp(&a.session_count)
+            .then_with(|| a.provider.cmp(&b.provider))
     });
 
     if let Some(start) = overall_start {
@@ -679,7 +816,10 @@ fn collect_all_sessions() -> Result<SessionListResponse> {
         );
     }
 
-    Ok(SessionListResponse { sessions })
+    Ok(SessionListResponse {
+        sessions,
+        providers,
+    })
 }
 
 fn collect_worktree_summaries() -> Result<WorktreeListResponse> {
@@ -1096,22 +1236,6 @@ fn summarize_single_worktree(
             match_sessions_for_worktree(info, external_sessions)
         }));
     }
-    if path_exists {
-        let claude_sessions =
-            profiler.measure_worktree(id, "sessions.claude", || get_claude_sessions(&info.path));
-        sessions.extend(
-            claude_sessions
-                .into_iter()
-                .map(|session| WorktreeSessionSummary {
-                    provider: "claude".to_string(),
-                    session_id: session.id,
-                    last_user_message: session.last_user_message,
-                    last_timestamp: session.last_timestamp,
-                    user_messages: session.user_messages,
-                }),
-        );
-    }
-
     sessions.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
 
     let mut last_activity = info.created_at;

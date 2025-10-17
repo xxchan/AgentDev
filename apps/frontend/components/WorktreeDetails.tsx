@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
 } from 'react';
+import clsx from 'clsx';
 import { apiUrl } from '@/lib/api';
 import { WorktreeSummary } from '@/types';
 import WorktreeGitSection from './WorktreeGitSection';
@@ -69,11 +70,16 @@ export default function WorktreeDetails({
     type: 'success' | 'error';
     message: string;
   } | null>(null);
+  const [activePanel, setActivePanel] = useState<'sessions' | 'git'>('sessions');
 
   useEffect(() => {
     setIsLaunchingVsCode(false);
     setVsCodeFeedback(null);
   }, [commandEndpoint]);
+
+  useEffect(() => {
+    setActivePanel('sessions');
+  }, [worktree?.id]);
 
   useEffect(() => {
     if (!vsCodeFeedback || vsCodeFeedback.type !== 'success') {
@@ -151,6 +157,14 @@ export default function WorktreeDetails({
   const status = worktree.git_status ?? undefined;
   const commit = worktree.head_commit ?? undefined;
   const commitsAhead = worktree.commits_ahead ?? undefined;
+  const sessionCount = worktree.sessions.length;
+  const diffEstimate =
+    status !== undefined
+      ? status.staged + status.unstaged + status.untracked
+      : null;
+  const sessionTabLabel = `Sessions (${sessionCount})`;
+  const diffTabLabel =
+    diffEstimate !== null ? `Git Diff (${diffEstimate})` : 'Git Diff';
 
   const overviewCards = [
     {
@@ -289,15 +303,66 @@ export default function WorktreeDetails({
 
         <div className="space-y-6 pb-12">
           {renderOverview()}
-          <WorktreeSessions sessions={worktree.sessions} formatTimestamp={formatTimestamp} />
 
-          <WorktreeGitSection
-            worktreeId={worktree.id}
-            status={status}
-            commit={commit}
-            commitsAhead={commitsAhead}
-            formatTimestamp={formatTimestamp}
-          />
+          <section className="rounded-lg border border-gray-200 bg-white px-4 py-4 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
+                  Worktree Activity
+                </h3>
+                <p className="text-xs text-gray-500">
+                  Switch between conversation history and git diff insights.
+                </p>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-gray-400">
+                <span>{sessionCount} sessions</span>
+                {diffEstimate !== null && <span>{diffEstimate} changes</span>}
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActivePanel('sessions')}
+                className={clsx(
+                  'rounded-md border px-3 py-1.5 text-xs font-medium transition',
+                  activePanel === 'sessions'
+                    ? 'border-blue-500 bg-blue-500/10 text-blue-600 shadow-sm'
+                    : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:text-gray-800',
+                )}
+              >
+                {sessionTabLabel}
+              </button>
+              <button
+                type="button"
+                onClick={() => setActivePanel('git')}
+                className={clsx(
+                  'rounded-md border px-3 py-1.5 text-xs font-medium transition',
+                  activePanel === 'git'
+                    ? 'border-blue-500 bg-blue-500/10 text-blue-600 shadow-sm'
+                    : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:text-gray-800',
+                )}
+              >
+                {diffTabLabel}
+              </button>
+            </div>
+          </section>
+
+          {activePanel === 'sessions' ? (
+            <WorktreeSessions
+              sessions={worktree.sessions}
+              formatTimestamp={formatTimestamp}
+            />
+          ) : (
+            <WorktreeGitSection
+              worktreeId={worktree.id}
+              status={status}
+              commit={commit}
+              commitsAhead={commitsAhead}
+              formatTimestamp={formatTimestamp}
+              defaultExpanded
+            />
+          )}
         </div>
       </div>
     </div>

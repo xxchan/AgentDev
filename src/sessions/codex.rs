@@ -7,10 +7,11 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use super::{SessionProvider, SessionRecord};
+use super::{SessionEvent, SessionProvider, SessionRecord};
 
 pub struct CodexSessionProvider {
     sessions_dir: Option<PathBuf>,
@@ -38,6 +39,317 @@ impl SessionCache {
 
 static CODEX_SESSION_CACHE: OnceLock<Mutex<SessionCache>> = OnceLock::new();
 
+/// TODO(provider-models): consider promoting this raw struct into a typed enum so callers can match variants explicitly.
+#[derive(Debug, Deserialize, Serialize)]
+struct CodexRawEntry {
+    #[serde(rename = "type", default)]
+    entry_type: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    originator: Option<String>,
+    #[serde(default)]
+    instructions: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    payload: Option<CodexRawPayload>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+/// TODO(provider-models): same as above—eventually migrate into strongly typed payload variants.
+#[derive(Debug, Deserialize, Serialize)]
+struct CodexRawPayload {
+    #[serde(rename = "type", default)]
+    payload_type: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    content: Option<Value>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    originator: Option<String>,
+    #[serde(default)]
+    instructions: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone)]
+enum CodexEntryCategory {
+    SessionMeta,
+    ResponseItem,
+    UserMessage,
+    AssistantMessage,
+    Event(String),
+}
+
+#[derive(Debug)]
+struct CodexParsedEntry {
+    raw: Value,
+    data: CodexRawEntry,
+}
+
+impl CodexParsedEntry {
+    fn parse(raw: Value) -> Option<Self> {
+        let data = serde_json::from_value::<CodexRawEntry>(raw.clone()).ok()?;
+        Some(Self { raw, data })
+    }
+
+    fn timestamp(&self) -> Option<DateTime<Utc>> {
+        self.data
+            .timestamp
+            .as_deref()
+            .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+    }
+
+    fn raw_payload(&self) -> Option<&Value> {
+        self.raw
+            .as_object()
+            .and_then(|object| object.get("payload"))
+    }
+
+    fn payload_value(&self) -> Option<Value> {
+        self.data
+            .payload
+            .as_ref()
+            .and_then(|payload| serde_json::to_value(payload).ok())
+    }
+
+    fn category_with_actor(&self) -> (String, Option<String>, CodexEntryCategory) {
+        let mut category = self
+            .data
+            .entry_type
+            .as_ref()
+            .or(self.data.kind.as_ref())
+            .cloned()
+            .unwrap_or_else(|| "message".to_string());
+
+        let mut actor = self
+            .data
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.role.clone())
+            .or_else(|| self.data.role.clone());
+
+        if actor.is_none() && category == "session_meta" {
+            actor = Some("system".to_string());
+        }
+
+        if category == "event_msg" {
+            if let Some(payload) = self.data.payload.as_ref() {
+                if let Some(inner) = payload.payload_type.as_ref() {
+                    category = inner.clone();
+                    if actor.is_none() {
+                        actor = match inner.as_str() {
+                            "user_message" => Some("user".to_string()),
+                            "assistant_message" => Some("assistant".to_string()),
+                            _ => None,
+                        };
+                    }
+                }
+            }
+        }
+
+        let entry_category = match category.as_str() {
+            "session_meta" => CodexEntryCategory::SessionMeta,
+            "response_item" => CodexEntryCategory::ResponseItem,
+            "user_message" => CodexEntryCategory::UserMessage,
+            "assistant_message" => CodexEntryCategory::AssistantMessage,
+            other => CodexEntryCategory::Event(other.to_string()),
+        };
+
+        (category, actor, entry_category)
+    }
+
+    fn apply_summary(&self, record: &mut SessionRecord, entry_category: &CodexEntryCategory) {
+        match entry_category {
+            CodexEntryCategory::SessionMeta => {
+                if let Some(payload) = self.data.payload.as_ref() {
+                    if let Some(id) = payload.id.as_ref().or(self.data.id.as_ref()) {
+                        record.id = id.clone();
+                    }
+                    if record.originator.is_none() {
+                        if let Some(originator) =
+                            payload.originator.as_ref().or(self.data.originator.as_ref())
+                        {
+                            record.originator = Some(originator.clone());
+                        }
+                    }
+                    if record.instructions.is_none() {
+                        if let Some(instructions) = payload
+                            .instructions
+                            .as_ref()
+                            .or(self.data.instructions.as_ref())
+                        {
+                            let trimmed = instructions.trim();
+                            if !trimmed.is_empty() {
+                                record.instructions = Some(trimmed.to_string());
+                            }
+                        }
+                    }
+                    if record.working_dir.is_none() {
+                        if let Some(cwd) = payload
+                            .cwd
+                            .as_deref()
+                            .or_else(|| payload.extra.get("working_dir").and_then(|v| v.as_str()))
+                        {
+                            record.set_working_dir(cwd);
+                        }
+                    }
+                } else if let Some(id) = self.data.id.as_ref() {
+                    record.id = id.clone();
+                }
+            }
+            _ => {
+                if record.working_dir.is_none() {
+                    if let Some(dir) = self.working_dir_hint() {
+                        record.set_working_dir(&dir);
+                    }
+                }
+            }
+        }
+
+        if let Some(id) = self.data.id.as_ref() {
+            if id != &record.id {
+                record.id = id.clone();
+            }
+        }
+
+        if record.originator.is_none() {
+            if let Some(originator) = self.data.originator.as_ref() {
+                record.originator = Some(originator.clone());
+            }
+        }
+
+        if record.instructions.is_none() {
+            if let Some(instructions) = self.data.instructions.as_ref() {
+                let trimmed = instructions.trim();
+                if !trimmed.is_empty() {
+                    record.instructions = Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    fn working_dir_hint(&self) -> Option<String> {
+        if let Some(payload) = self.data.payload.as_ref() {
+            if let Some(cwd) = payload.cwd.as_ref() {
+                return Some(cwd.clone());
+            }
+            if let Some(dir) = payload.extra.get("working_dir").and_then(|v| v.as_str()) {
+                return Some(dir.to_string());
+            }
+        }
+        if let Some(dir) = self
+            .data
+            .extra
+            .get("cwd")
+            .and_then(|value| value.as_str())
+        {
+            return Some(dir.to_string());
+        }
+        extract_working_dir_from_message(&self.raw)
+    }
+
+    fn to_event(&self, include_raw: bool) -> Option<SessionEvent> {
+        let (category, actor, entry_category) = self.category_with_actor();
+
+        let payload_value = self.payload_value();
+
+        let text = match entry_category {
+            CodexEntryCategory::SessionMeta => self
+                .raw_payload()
+                .and_then(codex_format_session_meta)
+                .unwrap_or_else(|| pretty_json(&self.raw)),
+            CodexEntryCategory::ResponseItem => self
+                .raw_payload()
+                .and_then(codex_format_response_item)
+                .unwrap_or_else(|| pretty_json(&self.raw)),
+            CodexEntryCategory::UserMessage | CodexEntryCategory::AssistantMessage => self
+                .raw_payload()
+                .and_then(codex_format_event_message)
+                .unwrap_or_else(|| {
+                    self.data
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| pretty_json(&self.raw))
+                }),
+            CodexEntryCategory::Event(ref kind) => {
+                if kind == "event_msg" {
+                    self.raw_payload()
+                        .and_then(codex_format_event_message)
+                        .unwrap_or_else(|| pretty_json(&self.raw))
+                } else {
+                    self.raw_payload()
+                        .and_then(codex_format_generic_payload)
+                        .or_else(|| {
+                            self.data
+                                .message
+                                .clone()
+                                .map(|value| value.trim().to_string())
+                        })
+                        .unwrap_or_else(|| pretty_json(&self.raw))
+                }
+            }
+        };
+
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let working_dir = self.working_dir_hint();
+        let data = attach_working_dir(payload_value, working_dir);
+
+        let label = actor
+            .as_ref()
+            .map(|value| to_title_case(value))
+            .or_else(|| Some(to_title_case(&category)));
+
+        let timestamp = self.timestamp();
+
+        let raw = if include_raw {
+            Some(self.raw.clone())
+        } else {
+            None
+        };
+
+        Some(SessionEvent {
+            actor,
+            category: match entry_category {
+                CodexEntryCategory::Event(ref kind) => kind.clone(),
+                other => match other {
+                    CodexEntryCategory::SessionMeta => "session_meta".to_string(),
+                    CodexEntryCategory::ResponseItem => "response_item".to_string(),
+                    CodexEntryCategory::UserMessage => "user_message".to_string(),
+                    CodexEntryCategory::AssistantMessage => "assistant_message".to_string(),
+                    CodexEntryCategory::Event(_) => unreachable!(),
+                },
+            },
+            label,
+            text: Some(trimmed.to_string()),
+            summary_text: None,
+            data,
+            timestamp,
+            raw,
+        })
+    }
+}
+
 impl CodexSessionProvider {
     pub fn new() -> Self {
         let sessions_dir = std::env::var("HOME")
@@ -53,87 +365,22 @@ impl CodexSessionProvider {
         let mut record = SessionRecord::new(self.name(), path.to_path_buf());
 
         for line in reader.lines().map_while(Result::ok) {
-            if line.trim().is_empty() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
                 continue;
             }
 
-            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            let Ok(raw) = serde_json::from_str::<Value>(trimmed) else {
                 continue;
             };
 
-            if let Some(ts_str) = value.get("timestamp").and_then(|v| v.as_str()) {
-                if let Ok(parsed) = DateTime::parse_from_rfc3339(ts_str) {
-                    record.last_timestamp = Some(parsed.with_timezone(&Utc));
-                }
-            }
-
-            match value.get("type").and_then(|v| v.as_str()) {
-                Some("session_meta") => {
-                    if let Some(payload) = value.get("payload") {
-                        if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                            record.id = id.to_string();
-                        }
-                        if let Some(cwd) = payload.get("cwd").and_then(|v| v.as_str()) {
-                            record.set_working_dir(cwd);
-                        }
-                        if let Some(originator) = payload.get("originator").and_then(|v| v.as_str())
-                        {
-                            record.originator = Some(originator.to_string());
-                        }
-                        if let Some(instr) = payload.get("instructions").and_then(|v| v.as_str()) {
-                            record.instructions = Some(instr.to_string());
-                        }
-                    }
-                }
-                Some("response_item") => {
-                    if let Some(payload) = value.get("payload") {
-                        let role_is_user = payload
-                            .get("role")
-                            .and_then(|v| v.as_str())
-                            .map(|role| role.eq_ignore_ascii_case("user"))
-                            .unwrap_or(false);
-                        if role_is_user {
-                            if let Some(text) = extract_message_text(payload) {
-                                if record.first_user_message.is_none() {
-                                    record.first_user_message = Some(text.clone());
-                                }
-                                record.last_user_message = Some(text.clone());
-                                if record
-                                    .user_messages
-                                    .last()
-                                    .map_or(true, |previous| previous != &text)
-                                {
-                                    record.user_messages.push(text);
-                                }
-                            }
-                        }
-                    }
-                }
-                Some("event_msg") => {
-                    if let Some(payload) = value.get("payload") {
-                        if payload
-                            .get("type")
-                            .and_then(|v| v.as_str())
-                            .map(|kind| kind.eq_ignore_ascii_case("user_message"))
-                            .unwrap_or(false)
-                        {
-                            if let Some(msg) = payload.get("message").and_then(|v| v.as_str()) {
-                                if record.first_user_message.is_none() {
-                                    record.first_user_message = Some(msg.to_string());
-                                }
-                                record.last_user_message = Some(msg.to_string());
-                                if record
-                                    .user_messages
-                                    .last()
-                                    .map_or(true, |previous| previous != msg)
-                                {
-                                    record.user_messages.push(msg.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {}
+            let Some(entry) = CodexParsedEntry::parse(raw) else {
+                continue;
+            };
+            let (_, _, entry_category) = entry.category_with_actor();
+            entry.apply_summary(&mut record, &entry_category);
+            if let Some(event) = entry.to_event(false) {
+                record.ingest_event(&event);
             }
         }
 
@@ -243,23 +490,332 @@ impl SessionProvider for CodexSessionProvider {
         sessions.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
         Ok(sessions)
     }
+
+    fn load_session_events(&self, record: &SessionRecord) -> Result<Vec<SessionEvent>> {
+        let file = File::open(&record.file_path)?;
+        let reader = BufReader::new(file);
+        let mut events = Vec::new();
+
+        for line in reader.lines() {
+            let trimmed = match line {
+                Ok(value) => value.trim().to_string(),
+                Err(_) => continue,
+            };
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let raw: Value = match serde_json::from_str(&trimmed) {
+                Ok(parsed) => parsed,
+                Err(_) => continue,
+            };
+
+            let Some(entry) = CodexParsedEntry::parse(raw) else {
+                continue;
+            };
+
+            if let Some(event) = entry.to_event(true) {
+                events.push(event);
+            }
+        }
+
+        Ok(events)
+    }
 }
 
-fn extract_message_text(payload: &Value) -> Option<String> {
-    if let Some(content) = payload.get("content") {
-        if let Some(items) = content.as_array() {
-            let mut pieces = Vec::new();
-            for item in items {
-                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                    if !text.trim().is_empty() {
-                        pieces.push(text.trim());
-                    }
-                }
-            }
-            if !pieces.is_empty() {
-                return Some(pieces.join(" "));
+fn extract_working_dir_from_message(value: &Value) -> Option<String> {
+    if let Some(content) = value.get("content") {
+        if let Some(dir) = extract_working_dir_from_content(content) {
+            return Some(dir);
+        }
+    }
+    if let Some(message) = value.get("message") {
+        if let Some(content) = message.get("content") {
+            if let Some(dir) = extract_working_dir_from_content(content) {
+                return Some(dir);
             }
         }
     }
     None
+}
+
+fn extract_working_dir_from_content(content: &Value) -> Option<String> {
+    match content {
+        Value::String(text) => extract_cwd_from_text(text),
+        Value::Array(items) => {
+            for item in items {
+                if let Some(text) = item.get("text").and_then(|entry| entry.as_str()) {
+                    if let Some(dir) = extract_cwd_from_text(text) {
+                        return Some(dir);
+                    }
+                }
+                if let Some(nested) = item.get("content") {
+                    if let Some(dir) = extract_working_dir_from_content(nested) {
+                        return Some(dir);
+                    }
+                }
+            }
+            None
+        }
+        Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(|entry| entry.as_str()) {
+                if let Some(dir) = extract_cwd_from_text(text) {
+                    return Some(dir);
+                }
+            }
+            if let Some(nested) = map.get("content") {
+                return extract_working_dir_from_content(nested);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn extract_cwd_from_text(text: &str) -> Option<String> {
+    let mut slice = text;
+    loop {
+        let Some(start) = slice.find("<cwd>") else {
+            return None;
+        };
+        let remainder = &slice[start + 5..];
+        let Some(end) = remainder.find("</cwd>") else {
+            return None;
+        };
+        let value = remainder[..end].trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+        let next_index = start + 5 + end + 6;
+        if next_index >= slice.len() {
+            return None;
+        }
+        slice = &slice[next_index..];
+    }
+}
+
+fn attach_working_dir(data: Option<Value>, working_dir: Option<String>) -> Option<Value> {
+    let Some(dir) = working_dir else {
+        return data;
+    };
+
+    match data {
+        Some(Value::Object(mut map)) => {
+            map.entry("working_dir".to_string())
+                .or_insert_with(|| Value::String(dir.clone()));
+            Some(Value::Object(map))
+        }
+        Some(other) => {
+            let mut map = serde_json::Map::new();
+            map.insert("payload".to_string(), other);
+            map.insert("working_dir".to_string(), Value::String(dir));
+            Some(Value::Object(map))
+        }
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert("working_dir".to_string(), Value::String(dir));
+            Some(Value::Object(map))
+        }
+    }
+}
+
+fn to_title_case(value: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for segment in value.split(|c: char| c == '_' || c == '-' || c == ' ') {
+        if segment.is_empty() {
+            continue;
+        }
+        let mut chars = segment.chars();
+        if let Some(first) = chars.next() {
+            let mut part = String::new();
+            part.extend(first.to_uppercase());
+            part.extend(chars.flat_map(|ch| ch.to_lowercase()));
+            parts.push(part);
+        }
+    }
+
+    if parts.is_empty() {
+        value.to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
+fn codex_format_session_meta(payload: &Value) -> Option<String> {
+    let payload = payload.as_object()?;
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(id) = payload.get("id").and_then(|entry| entry.as_str()) {
+        parts.push(format!("Session ID: {id}"));
+    }
+    if let Some(originator) = payload.get("originator").and_then(|entry| entry.as_str()) {
+        parts.push(format!("Originator: {originator}"));
+    }
+    if let Some(version) = payload.get("cli_version").and_then(|entry| entry.as_str()) {
+        parts.push(format!("CLI version: {version}"));
+    }
+    if let Some(cwd) = payload.get("cwd").and_then(|entry| entry.as_str()) {
+        parts.push(format!("Working directory: {cwd}"));
+    }
+    if let Some(instructions) = payload
+        .get("instructions")
+        .and_then(|entry| entry.as_str())
+        .map(str::trim)
+    {
+        if !instructions.is_empty() {
+            parts.push(format!("Instructions:\n{instructions}"));
+        }
+    }
+
+    if parts.is_empty() {
+        Some(pretty_json(&Value::Object(payload.clone())))
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
+fn codex_format_response_item(payload: &Value) -> Option<String> {
+    let content = payload.get("content")?;
+    match content {
+        Value::Array(items) => {
+            let mut parts: Vec<String> = Vec::new();
+            for item in items {
+                if let Some(text) = codex_format_content_item(item) {
+                    parts.push(text);
+                }
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n\n"))
+            }
+        }
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        other => Some(pretty_json(other)),
+    }
+}
+
+fn codex_format_event_message(payload: &Value) -> Option<String> {
+    if let Some(text) = payload.get("message").and_then(|entry| entry.as_str()) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    Some(pretty_json(payload))
+}
+
+fn codex_format_generic_payload(payload: &Value) -> Option<String> {
+    if payload.is_null() {
+        return None;
+    }
+    if let Some(text) = payload.as_str() {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    } else {
+        Some(pretty_json(payload))
+    }
+}
+
+fn codex_format_content_item(item: &Value) -> Option<String> {
+    let item_type = item
+        .get("type")
+        .and_then(|entry| entry.as_str())
+        .unwrap_or_default();
+
+    match item_type {
+        "input_text" | "output_text" | "text" | "code" => item
+            .get("text")
+            .and_then(|entry| entry.as_str())
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty()),
+        "tool_use" => {
+            let name = item
+                .get("name")
+                .and_then(|entry| entry.as_str())
+                .unwrap_or("tool");
+            let mut parts = vec![format!("Tool call: {name}")];
+            if let Some(input) = item.get("input") {
+                let serialized = pretty_json(input);
+                if !serialized.is_empty() {
+                    parts.push(serialized);
+                }
+            }
+            Some(parts.join("\n"))
+        }
+        "tool_result" => {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(id) = item
+                .get("tool_use_id")
+                .and_then(|entry| entry.as_str())
+                .filter(|entry| !entry.is_empty())
+            {
+                parts.push(format!("Tool result ({id})"));
+            } else {
+                parts.push("Tool result".to_string());
+            }
+
+            if let Some(content) = item.get("content") {
+                match content {
+                    Value::Array(entries) => {
+                        let mut details: Vec<String> = Vec::new();
+                        for entry in entries {
+                            if let Some(text) = entry.get("text").and_then(|value| value.as_str()) {
+                                let trimmed = text.trim();
+                                if !trimmed.is_empty() {
+                                    details.push(trimmed.to_string());
+                                }
+                                continue;
+                            }
+                            details.push(pretty_json(entry));
+                        }
+                        if !details.is_empty() {
+                            parts.push(details.join("\n"));
+                        }
+                    }
+                    Value::String(text) => {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            parts.push(trimmed.to_string());
+                        }
+                    }
+                    other => parts.push(pretty_json(other)),
+                }
+            } else if let Some(text) = item.get("text").and_then(|entry| entry.as_str()) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed.to_string());
+                }
+            }
+
+            Some(parts.join("\n"))
+        }
+        _ => {
+            if let Some(text) = item.get("text").and_then(|entry| entry.as_str()) {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    Some(pretty_json(item))
+                } else {
+                    Some(trimmed.to_string())
+                }
+            } else {
+                Some(pretty_json(item))
+            }
+        }
+    }
+}
+
+fn pretty_json(value: &Value) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }

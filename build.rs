@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use cargo_emit::{rerun_if_changed, rerun_if_env_changed, rustc_cfg};
 
 const FRONTEND_DIR: &str = "apps/frontend";
-const FRONTEND_DIST_DIR: &str = "out";
+const FRONTEND_DIST_DIRS: &[&str] = &[".next-prod", "out"];
 const ENV_SKIP_BUILD: &str = "AGENTDEV_SKIP_UI_BUILD";
 
 fn env_var_truthy(key: &str) -> bool {
@@ -91,13 +91,7 @@ fn build_frontend_assets() -> Result<()> {
 
     run_pnpm(&["run", "build"]).context("failed to build frontend bundle")?;
 
-    let dist = frontend_path.join(FRONTEND_DIST_DIR);
-    if !dist.exists() {
-        bail!(
-            "frontend build completed but '{}' directory is missing",
-            dist.display()
-        );
-    }
+    let dist = find_frontend_dist(frontend_path)?;
 
     let destination = dest_dir()?;
     if destination.exists() {
@@ -115,6 +109,19 @@ fn build_frontend_assets() -> Result<()> {
         .with_context(|| format!("failed to copy assets into {}", destination.display()))?;
 
     Ok(())
+}
+
+fn find_frontend_dist(frontend_path: &Path) -> Result<PathBuf> {
+    for dir in FRONTEND_DIST_DIRS {
+        let candidate = frontend_path.join(dir);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    bail!(
+        "frontend build completed but none of the expected output directories were found ({})",
+        FRONTEND_DIST_DIRS.join(", ")
+    );
 }
 
 fn main() -> Result<()> {

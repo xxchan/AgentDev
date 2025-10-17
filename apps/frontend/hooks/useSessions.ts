@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { SessionListResponse, SessionSummary } from '@/types';
+import { SessionListResponse, SessionProviderSummary, SessionSummary } from '@/types';
 import { apiUrl } from '@/lib/api';
 
 export function useSessions() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [providers, setProviders] = useState<SessionProviderSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,6 +22,11 @@ export function useSessions() {
 
       const payload: SessionListResponse = await response.json();
       setSessions(payload.sessions ?? []);
+      if (Array.isArray(payload.providers)) {
+        setProviders(payload.providers);
+      } else {
+        setProviders([]);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       setError(message);
@@ -38,6 +44,7 @@ export function useSessions() {
 
   return {
     sessions,
+    providers,
     isLoading,
     error,
     refetch: fetchSessions,

@@ -67,7 +67,7 @@ enum Commands {
         #[arg(long)]
         agent: Option<String>,
     },
-    #[command(hide = true)]
+    #[command(hide = true, alias = "rm")]
     Delete {
         /// Name of the worktree to delete (current if not provided)
         name: Option<String>,
@@ -84,7 +84,7 @@ enum Commands {
         /// New name for the worktree
         new_name: String,
     },
-    #[command(hide = true)]
+    #[command(hide = true, alias = "ls")]
     List {
         /// Output as JSON
         #[arg(long)]
@@ -211,6 +211,7 @@ enum WorktreeCommands {
         agent: Option<String>,
     },
     /// Delete a worktree and clean up
+    #[command(alias = "rm")]
     Delete {
         /// Name of the worktree to delete (current if not provided)
         name: Option<String>,
@@ -228,6 +229,7 @@ enum WorktreeCommands {
         new_name: String,
     },
     /// List all active instances
+    #[command(alias = "ls")]
     List {
         /// Output as JSON
         #[arg(long)]

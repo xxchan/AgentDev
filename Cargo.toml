@@ -32,10 +32,12 @@ ctrlc = "3.4"
 walkdir = "2.5"
 uuid = { version = "1", features = ["serde", "v4"] }
 tokio = { version = "1.0", features = ["full"] }
-tower-http = { version = "0.5", features = ["cors", "fs"] }
+tower = { version = "0.5", features = ["make", "util"] }
+tower-http = { version = "0.5", features = ["cors", "fs", "normalize-path"] }
 rayon = "1.10"
 rust-embed = { version = "8.0", features = ["axum", "interpolate-folder-path"] }
 mime_guess = "2.0"
+md5 = "0.7"
 
 [dev-dependencies]
 insta = { version = "1.41.1", features = ["json", "redactions"] }
@@ -43,7 +45,6 @@ tempfile = "3.14.0"
 assert_cmd = "2.0.16"
 predicates = "3.1.3"
 regex = "1.11.1"
-tower = { version = "0.5", features = ["util"] }
 
 [build-dependencies]
 anyhow = "1.0.98"

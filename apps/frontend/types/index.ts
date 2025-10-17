@@ -40,6 +40,35 @@ export interface SessionSummary extends BaseSessionSummary {
   working_dir?: string | null;
 }
 
+export interface SessionProviderSummary {
+  provider: string;
+  session_count: number;
+  session_ids: string[];
+  latest_timestamp?: string | null;
+}
+
+export type SessionDetailMode = 'user_only' | 'full';
+
+export interface SessionEvent {
+  actor?: string;
+  category: string;
+  label?: string;
+  text?: string;
+  summary_text?: string;
+  data?: Record<string, unknown> | null;
+  timestamp?: string;
+  raw?: unknown;
+}
+
+export interface SessionDetailResponse {
+  provider: string;
+  session_id: string;
+  last_timestamp?: string | null;
+  working_dir?: string | null;
+  mode: SessionDetailMode;
+  events: SessionEvent[];
+}
+
 export interface WorktreeSummary {
   id: string;
   name: string;
@@ -64,6 +93,7 @@ export interface WorktreeListResponse {
 
 export interface SessionListResponse {
   sessions: SessionSummary[];
+  providers?: SessionProviderSummary[];
 }
 
 export interface WorktreeCommitDiff {

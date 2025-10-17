@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   WorktreeCommitInfo,
   WorktreeCommitsAhead,
@@ -8,6 +8,99 @@ import {
   WorktreeGitStatus,
 } from '@/types';
 import { apiUrl } from '@/lib/api';
+import GitDiffList, { GitDiffListEntry } from '@/components/GitDiffList';
+
+type GitDiffSection = {
+  diff: string;
+  key: string;
+};
+
+function splitGitDiffByFile(diffText: string): GitDiffSection[] {
+  const trimmed = diffText.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const lines = trimmed.split('\n');
+  const sections: GitDiffSection[] = [];
+  let current: string[] = [];
+
+  const flush = () => {
+    if (!current.length) return;
+    const diffChunk = current.join('\n');
+    const firstLine = current[0] ?? '';
+    sections.push({
+      diff: diffChunk,
+      key: `${firstLine}|${sections.length}`,
+    });
+    current = [];
+  };
+
+  for (const line of lines) {
+    if (line.startsWith('diff --git ') && current.length) {
+      flush();
+    }
+    current.push(line);
+  }
+
+  flush();
+
+  return sections;
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  A: 'Added',
+  M: 'Modified',
+  D: 'Deleted',
+  R: 'Renamed',
+  C: 'Copied',
+  T: 'Type change',
+  U: 'Unmerged',
+  '?': 'Untracked',
+};
+
+function normaliseStatusLabel(status?: string | null): string | null {
+  if (!status) {
+    return null;
+  }
+  const trimmed = status.trim();
+  const code = trimmed.charAt(0);
+  return STATUS_LABELS[code] ?? trimmed;
+}
+
+function computeDiffStats(diffText: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  const lines = diffText.split('\n');
+  for (const line of lines) {
+    if (!line.length) continue;
+    if (line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('@@')) continue;
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (line.startsWith('+')) additions += 1;
+    else if (line.startsWith('-')) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function extractDiffLabel(diffText: string, fallback: string): string {
+  const headerMatch = diffText.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+  const stripPrefix = (value: string | null | undefined) => {
+    if (!value) return null;
+    if (value === '/dev/null') return null;
+    return value.replace(/^[ab]\//, '');
+  };
+
+  if (!headerMatch) {
+    return fallback;
+  }
+
+  const oldPath = stripPrefix(headerMatch[1]) ?? fallback;
+  const newPath = stripPrefix(headerMatch[2]) ?? fallback;
+
+  if (oldPath && newPath && oldPath !== newPath) {
+    return `${oldPath} → ${newPath}`;
+  }
+  return newPath ?? oldPath ?? fallback;
+}
 
 interface WorktreeGitSectionProps {
   worktreeId: string | null;
@@ -15,6 +108,7 @@ interface WorktreeGitSectionProps {
   commit?: WorktreeCommitInfo | null;
   commitsAhead?: WorktreeCommitsAhead | null;
   formatTimestamp: (value?: string | null) => string;
+  defaultExpanded?: boolean;
 }
 
 function formatCommitId(commitId?: string | null) {
@@ -30,20 +124,23 @@ export default function WorktreeGitSection({
   commit,
   commitsAhead,
   formatTimestamp,
+  defaultExpanded = false,
 }: WorktreeGitSectionProps) {
   const [gitDetails, setGitDetails] = useState<WorktreeGitDetails | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
   const [isGitLoading, setIsGitLoading] = useState(false);
-  const [expandedDiffKey, setExpandedDiffKey] = useState<string | null>(null);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
   useEffect(() => {
     setGitDetails(null);
     setGitError(null);
     setIsGitLoading(false);
-    setExpandedDiffKey(null);
-    setIsExpanded(false);
-  }, [worktreeId]);
+    setIsExpanded(defaultExpanded);
+  }, [worktreeId, defaultExpanded]);
+
+  useEffect(() => {
+    setIsExpanded(defaultExpanded);
+  }, [defaultExpanded]);
 
   useEffect(() => {
     if (!isExpanded || !worktreeId) {
@@ -98,103 +195,76 @@ export default function WorktreeGitSection({
     };
   }, [worktreeId, isExpanded, gitDetails]);
 
-  useEffect(() => {
-    if (!gitDetails || expandedDiffKey) {
-      return;
-    }
-
-    const pickFirstDiffKey = () => {
-      const groups: Array<[string, WorktreeGitDetails['staged']]> = [
-        ['staged', gitDetails.staged],
-        ['unstaged', gitDetails.unstaged],
-        ['untracked', gitDetails.untracked],
-      ];
-      for (const [group, entries] of groups) {
-        for (let i = 0; i < entries.length; i += 1) {
-          const diff = entries[i]?.diff?.trim();
-          if (diff) {
-            return `${group}:${i}`;
-          }
-        }
-      }
-      return null;
-    };
-
-    const candidate = pickFirstDiffKey();
-    if (candidate) {
-      setExpandedDiffKey(candidate);
-    }
-  }, [gitDetails, expandedDiffKey]);
-
   const handleToggle = () => {
     setIsExpanded((prev) => {
       const next = !prev;
-      if (!next) {
-        setExpandedDiffKey(null);
-      }
       return next;
     });
   };
 
-  const renderDiffGroup = (
-    entries: WorktreeGitDetails['staged'],
-    groupKey: string,
-    emptyMessage: string,
-  ) => {
-    if (!entries.length) {
-      return (
-        <div className="rounded-md border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
-          {emptyMessage}
-        </div>
-      );
+  const commitDiffSections = useMemo(
+    () =>
+      gitDetails?.commit_diff?.diff
+        ? splitGitDiffByFile(gitDetails.commit_diff.diff)
+        : [],
+    [gitDetails?.commit_diff?.diff],
+  );
+
+  const diffEntries = useMemo<GitDiffListEntry[]>(() => {
+    if (!gitDetails) return [];
+
+    const result: GitDiffListEntry[] = [];
+
+    const pushGroup = (
+      items: WorktreeGitDetails['staged'],
+      groupKey: string,
+      groupLabel: string,
+    ) => {
+      items.forEach((entry, index) => {
+        const diffText = entry.diff ?? '';
+        const label = entry.display_path || entry.path || `File ${index + 1}`;
+        const { additions, deletions } = computeDiffStats(diffText);
+        result.push({
+          key: `${groupKey}:${index}:${label}`,
+          title: label,
+          groupKey,
+          groupLabel,
+          status: entry.status,
+          statusLabel: normaliseStatusLabel(entry.status),
+          diffText,
+          additions,
+          deletions,
+        });
+      });
+    };
+
+    if (commitDiffSections.length) {
+      const commitLabel = gitDetails.commit_diff?.reference
+        ? `Divergence vs ${gitDetails.commit_diff.reference}`
+        : 'Divergence vs base';
+      commitDiffSections.forEach((section, index) => {
+        const { additions, deletions } = computeDiffStats(section.diff);
+        const title = extractDiffLabel(section.diff, `Commit diff ${index + 1}`);
+        result.push({
+          key: `commit:${index}:${title}`,
+          title,
+          groupKey: 'commit',
+          groupLabel: commitLabel,
+          status: 'C',
+          statusLabel: 'Commit',
+          diffText: section.diff,
+          additions,
+          deletions,
+        });
+      });
     }
 
-    return (
-      <div className="space-y-3">
-        {entries.map((entry, index) => {
-          const itemKey = `${groupKey}:${index}`;
-          const isOpen = expandedDiffKey === itemKey;
+    pushGroup(gitDetails.staged, 'staged', 'Staged');
+    pushGroup(gitDetails.unstaged, 'unstaged', 'Unstaged');
+    pushGroup(gitDetails.untracked, 'untracked', 'Untracked');
 
-          return (
-            <div key={itemKey} className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-              <button
-                type="button"
-                onClick={() =>
-                  setExpandedDiffKey((prev) => (prev === itemKey ? null : itemKey))
-                }
-                className={`flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition ${
-                  isOpen ? 'bg-blue-50' : 'hover:bg-gray-50'
-                }`}
-              >
-                <div className="flex flex-1 flex-col gap-1">
-                  <div className="flex items-center gap-2">
-                    <span className="inline-flex min-w-[1.5rem] justify-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-gray-700">
-                      {entry.status}
-                    </span>
-                    <span className="font-mono text-xs text-gray-600">{entry.display_path}</span>
-                  </div>
-                  {!isOpen && <p className="text-xs text-gray-400">Click to preview unified diff</p>}
-                </div>
-                <span className="text-xs text-gray-400">{isOpen ? 'Hide diff' : 'Show diff'}</span>
-              </button>
-
-              {isOpen && (
-                <div className="border-t border-gray-200 bg-gray-950/95 px-4 py-4">
-                  {entry.diff.trim() ? (
-                    <pre className="max-h-96 overflow-auto text-xs leading-relaxed text-gray-100">
-                      {entry.diff}
-                    </pre>
-                  ) : (
-                    <p className="text-xs text-gray-300">No diff output available for this file.</p>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
+    return result;
+  }, [gitDetails, commitDiffSections]);
 
   const renderCommitStack = () => {
     const commitsAheadList = commitsAhead?.commits ?? [];
@@ -296,9 +366,7 @@ export default function WorktreeGitSection({
     );
   };
 
-  const totalDiffCount = gitDetails
-    ? gitDetails.staged.length + gitDetails.unstaged.length + gitDetails.untracked.length
-    : null;
+  const totalDiffCount = gitDetails ? diffEntries.length : null;
 
   return (
     <div className="space-y-4">
@@ -382,70 +450,30 @@ export default function WorktreeGitSection({
           </div>
         </header>
 
-        <div className="mt-4 space-y-5">
+        <div className="mt-4">
           {isExpanded ? (
-            <>
-              {isGitLoading ? (
-                <div className="flex items-center gap-2 text-sm text-gray-500">
-                  <div className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-200 border-t-blue-500" />
-                  <span>Loading diffs from git…</span>
-                </div>
-              ) : gitError ? (
-                <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  Failed to load diff details: {gitError}
-                </div>
-              ) : gitDetails ? (
-                <>
-                  {gitDetails.commit_diff && gitDetails.commit_diff.diff.trim() && (
-                    <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-700">
-                        Divergence vs {gitDetails.commit_diff.reference}
-                      </p>
-                      <pre className="mt-3 max-h-80 overflow-auto bg-gray-950/95 px-3 py-3 text-xs leading-relaxed text-gray-100">
-                        {gitDetails.commit_diff.diff}
-                      </pre>
-                    </div>
-                  )}
-
-                  <div className="space-y-6">
-                    <div>
-                      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-                        Staged ({gitDetails.staged.length})
-                      </h4>
-                      <div className="mt-2">
-                        {renderDiffGroup(gitDetails.staged, 'staged', 'No staged changes detected.')}
-                      </div>
-                    </div>
-
-                    <div>
-                      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-                        Unstaged ({gitDetails.unstaged.length})
-                      </h4>
-                      <div className="mt-2">
-                        {renderDiffGroup(
-                          gitDetails.unstaged,
-                          'unstaged',
-                          'Working tree matches staged content.',
-                        )}
-                      </div>
-                    </div>
-
-                    <div>
-                      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-                        Untracked ({gitDetails.untracked.length})
-                      </h4>
-                      <div className="mt-2">
-                        {renderDiffGroup(gitDetails.untracked, 'untracked', 'No new files detected.')}
-                      </div>
-                    </div>
-                  </div>
-                </>
+            isGitLoading ? (
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <div className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-200 border-t-blue-500" />
+                <span>Loading diffs from git…</span>
+              </div>
+            ) : gitError ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                Failed to load diff details: {gitError}
+              </div>
+            ) : gitDetails ? (
+              diffEntries.length > 0 ? (
+                <GitDiffList entries={diffEntries} emptyMessage="Working tree matches staged content." />
               ) : (
-                <p className="text-sm text-gray-500">
-                  Diff details will appear once git metadata loads for this worktree.
-                </p>
-              )}
-            </>
+                <div className="rounded-md border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+                  Working tree matches staged content.
+                </div>
+              )
+            ) : (
+              <p className="text-sm text-gray-500">
+                Diff details will appear once git metadata loads for this worktree.
+              </p>
+            )
           ) : (
             <div className="rounded-md border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
               Expand to inspect staged, unstaged, and untracked diffs.

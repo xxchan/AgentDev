@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "@git-diff-view/react/styles/diff-view.css";
 
 export const metadata: Metadata = {
   title: "AgentDev UI",
@@ -13,7 +14,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="h-full" suppressHydrationWarning>
-      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
+      <body className="flex h-full min-h-0 flex-col overflow-hidden bg-background font-sans text-foreground antialiased">
         {children}
       </body>
     </html>

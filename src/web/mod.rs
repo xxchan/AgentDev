@@ -7,7 +7,8 @@ use axum::{
     routing::{get, post},
 };
 use tokio::net::TcpListener;
-use tower_http::cors::CorsLayer;
+use tower::{ServiceBuilder, make::Shared};
+use tower_http::{cors::CorsLayer, normalize_path::NormalizePathLayer};
 
 pub mod api;
 mod frontend;
@@ -74,7 +75,11 @@ pub fn run_blocking(options: ServerOptions) -> Result<()> {
 async fn run_async(options: ServerOptions) -> Result<()> {
     println!("Starting agentdev UI server...");
 
-    let app = build_router();
+    let router = build_router();
+    let service = ServiceBuilder::new()
+        .layer(NormalizePathLayer::trim_trailing_slash())
+        .service(router);
+    let app = Shared::new(service);
 
     let port = options
         .port
@@ -109,18 +114,15 @@ async fn run_async(options: ServerOptions) -> Result<()> {
 fn build_router() -> Router {
     Router::new()
         // API routes
+        .route(
+            "/api/sessions/:provider/:session_id",
+            get(get_session_detail),
+        )
         .route("/api/sessions", get(get_sessions))
-        .route("/api/sessions/", get(get_sessions))
         .route("/api/worktrees", get(get_worktrees))
-        .route("/api/worktrees/", get(get_worktrees))
         .route("/api/worktrees/:worktree_id", get(get_worktree))
-        .route("/api/worktrees/:worktree_id/", get(get_worktree))
         .route(
             "/api/worktrees/:worktree_id/git",
-            get(get_worktree_git_details),
-        )
-        .route(
-            "/api/worktrees/:worktree_id/git/",
             get(get_worktree_git_details),
         )
         .route(
@@ -128,15 +130,7 @@ fn build_router() -> Router {
             get(get_worktree_processes),
         )
         .route(
-            "/api/worktrees/:worktree_id/processes/",
-            get(get_worktree_processes),
-        )
-        .route(
             "/api/worktrees/:worktree_id/commands",
-            post(post_worktree_command),
-        )
-        .route(
-            "/api/worktrees/:worktree_id/commands/",
             post(post_worktree_command),
         )
         // Static file serving (fallback to index.html for SPA)
@@ -223,7 +217,9 @@ mod tests {
     #[tokio::test]
     async fn worktrees_endpoint_accepts_trailing_slash() {
         let (_temp, _home_guard, _config_guard) = setup_test_env();
-        let app = build_router();
+        let app = ServiceBuilder::new()
+            .layer(NormalizePathLayer::trim_trailing_slash())
+            .service(build_router());
 
         let response = app
             .clone()
@@ -248,6 +244,7 @@ mod tests {
         );
 
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
@@ -272,7 +269,11 @@ mod tests {
     #[tokio::test]
     async fn worktree_detail_trailing_slash_returns_not_found_json() {
         let (_temp, _home_guard, _config_guard) = setup_test_env();
-        let response = build_router()
+        let app = ServiceBuilder::new()
+            .layer(NormalizePathLayer::trim_trailing_slash())
+            .service(build_router());
+        let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
@@ -293,5 +294,35 @@ mod tests {
             content_type, "text/plain; charset=utf-8",
             "expected plain text error response, got {content_type}"
         );
+    }
+
+    #[tokio::test]
+    async fn normalize_layer_handles_trailing_slash_on_simple_route() {
+        async fn handler() -> &'static str {
+            "ok"
+        }
+
+        let router = Router::new()
+            .route("/foo", axum::routing::get(handler))
+            .fallback(|| async { (StatusCode::NOT_FOUND, "missing") })
+            .layer(CorsLayer::permissive());
+
+        let app = ServiceBuilder::new()
+            .layer(NormalizePathLayer::trim_trailing_slash())
+            .service(router);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/foo/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("normalized route request");
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

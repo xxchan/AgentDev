@@ -39,7 +39,7 @@
 **前端 (Next.js/React)**
 4.  **Task F1: 项目初始化与布局**: 创建 Next.js 项目，集成 `Tailwind CSS`，并搭建三栏式 UI 骨架。
 5.  **Task F2: 左侧任务树实现**: 开发 `TaskTree` 组件，负责从后端获取数据、渲染树状列表，并处理用户选择事件。
-6.  **Task F3: `diff` 视图实现**: 开发 `DiffViewer` 组件，集成 `diff2html.js` 库，根据用户选择动态渲染 `diff` 结果。
+6.  **Task F3: `diff` 视图实现**: 开发 `GitDiffViewer` 组件，集成 `@git-diff-view/react` 库，直接渲染来自后端的 git patch。
 7.  **Task F4: 嵌入式终端实现**: 开发 `TmuxTerminal` 组件，集成 `xterm.js`，并实现与后端 WebSocket 的双向通信。
 8.  **Task F5: 客户端逻辑与状态管理**: 开发自定义 Hooks (`useTasks`, `useAgentDevSocket`) 来封装 API 调用和 WebSocket 通信，管理客户端状态。
 
@@ -85,9 +85,9 @@
         *   使用 `useEffect` 在组件挂载时调用 `fetch('/api/tasks')` 获取任务列表。
         *   使用 `useState` 管理任务列表数据和当前选中的条目 ID。
         *   将数据渲染成一个嵌套的 `<ul>`/`<li>` 列表，并处理点击事件来更新选中状态。
-    2.  **`DiffViewer.tsx`**:
+    2.  **`GitDiffViewer.tsx`**:
         *   接收 `diffText: string` 作为 prop。
-        *   使用 `useEffect` 和 `useRef` 来集成 `diff2html.js`。当 `diffText` 改变时，清空目标 DOM 元素，并调用 `Diff2HtmlUI` 的 `draw()` 方法重新渲染。
+        *   使用 `@git-diff-view/react` 提供的 `DiffView` 组件渲染统一或并排的 diff 视图，并提供模式切换、换行和复制补丁等操作。
     3.  **`TmuxTerminal.tsx`**:
         *   集成 `xterm.js` 和 `xterm-addon-fit` (用于自适应容器大小)。
         *   在组件挂载时初始化 `Terminal` 实例。
