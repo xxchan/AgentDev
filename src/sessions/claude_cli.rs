@@ -152,7 +152,7 @@ impl ClaudeParsedEntry {
     }
 
     fn to_event(&self, include_raw: bool) -> Option<SessionEvent> {
-        let (category, actor, entry_category) = self.category_with_actor();
+        let (category, mut actor, entry_category) = self.category_with_actor();
 
         let text = self
             .message_text()
@@ -211,6 +211,10 @@ impl ClaudeParsedEntry {
                 SessionToolPhase::Result => "tool_result".to_string(),
             };
             label = Some(tool_label(tool_event));
+            actor = Some(match tool_event.phase {
+                SessionToolPhase::Use => "assistant".to_string(),
+                SessionToolPhase::Result => "tool".to_string(),
+            });
         }
 
         let raw = if include_raw {

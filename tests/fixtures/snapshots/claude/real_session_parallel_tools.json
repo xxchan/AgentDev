@@ -77,7 +77,7 @@
     "timestamp": "2025-10-15T14:59:47.475Z"
   },
   {
-    "actor": "user",
+    "actor": "tool",
     "category": "tool_result",
     "label": "Tool Result",
     "text": "\"2\"",
@@ -107,7 +107,7 @@
     "timestamp": "2025-10-15T14:59:50.313Z"
   },
   {
-    "actor": "user",
+    "actor": "tool",
     "category": "tool_result",
     "label": "Tool Result",
     "text": "\"4\"",
