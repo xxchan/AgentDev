@@ -52,18 +52,6 @@
         "description": "Explore project structure",
         "prompt": "Search for the implementation of file reading functionality in the codex project. Look for:\n1. Any files containing \"read_file\" or \"read file\" functionality\n2. Tool implementations related to file operations\n3. The main tool registry or implementation files\n4. Any files that might contain file reading tools\n\nPlease search through the codebase and identify where the read file tool is implemented, what its structure looks like, and how it integrates with the overall system.",
         "subagent_name": "explorer"
-      },
-      "extras": {
-        "tool_calls": [
-          {
-            "function": {
-              "arguments": "{\"description\": \"Explore project structure\", \"subagent_name\": \"explorer\", \"prompt\": \"Search for the implementation of file reading functionality in the codex project. Look for:\\n1. Any files containing \\\"read_file\\\" or \\\"read file\\\" functionality\\n2. Tool implementations related to file operations\\n3. The main tool registry or implementation files\\n4. Any files that might contain file reading tools\\n\\nPlease search through the codebase and identify where the read file tool is implemented, what its structure looks like, and how it integrates with the overall system.\"}",
-              "name": "task"
-            },
-            "id": "task:0",
-            "type": "function"
-          }
-        ]
       }
     }
   },
@@ -197,18 +185,6 @@
       "identifier": "read_file:1",
       "input": {
         "path": "/Users/moonshot/Projects/codex/codex-rs/protocol/src/models.rs"
-      },
-      "extras": {
-        "tool_calls": [
-          {
-            "function": {
-              "arguments": "{\"path\": \"/Users/moonshot/Projects/codex/codex-rs/protocol/src/models.rs\"}",
-              "name": "read_file"
-            },
-            "id": "read_file:1",
-            "type": "function"
-          }
-        ]
       }
     }
   },
@@ -340,18 +316,6 @@
         "description": "Analyze shell tool limits",
         "prompt": "Please analyze the shell tool implementation in the codex project to understand:\n\n1. Look for shell tool implementation and any file reading limits\n2. Check if there are line number restrictions when reading files\n3. Look for any size limits, timeout limits, or output truncation\n4. Find the shell tool definition and parameter validation\n5. Check the actual command execution logic for any restrictions\n\nFocus on understanding what limitations exist when using shell commands to read files, particularly around line counts, output size, and any truncation behavior.",
         "subagent_name": "explorer"
-      },
-      "extras": {
-        "tool_calls": [
-          {
-            "function": {
-              "arguments": "{\"description\": \"Analyze shell tool limits\", \"subagent_name\": \"explorer\", \"prompt\": \"Please analyze the shell tool implementation in the codex project to understand:\\n\\n1. Look for shell tool implementation and any file reading limits\\n2. Check if there are line number restrictions when reading files\\n3. Look for any size limits, timeout limits, or output truncation\\n4. Find the shell tool definition and parameter validation\\n5. Check the actual command execution logic for any restrictions\\n\\nFocus on understanding what limitations exist when using shell commands to read files, particularly around line counts, output size, and any truncation behavior.\"}",
-              "name": "task"
-            },
-            "id": "task:2",
-            "type": "function"
-          }
-        ]
       }
     }
   },

@@ -91,18 +91,6 @@ fn tool_use_event_snapshot() {
               "paths": [
                 "src/lib.rs"
               ]
-            },
-            "extras": {
-              "tool_calls": [
-                {
-                  "function": {
-                    "arguments": "{\"paths\": [\"src/lib.rs\"], \"commit\": \"HEAD\"}",
-                    "name": "git_diff"
-                  },
-                  "id": "call-1",
-                  "type": "function"
-                }
-              ]
             }
           }
         }"#]]

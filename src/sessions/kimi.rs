@@ -652,9 +652,7 @@ fn extract_kimi_tool_event(raw: &Value) -> Option<SessionToolEvent> {
 
     if let Some(tool_calls) = raw.get("tool_calls").and_then(|value| value.as_array()) {
         if let Some(first) = tool_calls.first().and_then(|value| value.as_object()) {
-            let mut extras = Map::new();
-            extras.insert("tool_calls".to_string(), Value::Array(tool_calls.clone()));
-
+            let extras = Map::new();
             let function = first.get("function").and_then(|value| value.as_object());
             let name = function
                 .and_then(|map| map.get("name"))
