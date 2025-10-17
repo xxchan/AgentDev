@@ -506,7 +506,7 @@ export default function SessionListView({
           <span className="text-xs text-gray-400">{sessions.length} total</span>
         </div>
       </header>
-      <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-4">
+      <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-6">
         {sessions.length > 0 ? (
           <ul className="divide-y divide-gray-100">
           {sessions.map((session) => {

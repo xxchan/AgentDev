@@ -93,7 +93,6 @@ impl SessionRecord {
                 }
             }
         }
-
     }
 }
 

@@ -562,6 +562,60 @@ fn pretty_json(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use expect_test::expect;
+    use serde_json::json;
+
+    fn snapshot(event: &SessionEvent) -> String {
+        serde_json::to_string_pretty(event).expect("serialize event")
+    }
+
+    #[test]
+    fn tool_use_event_snapshot() {
+        let raw = json!({
+            "timestamp": "2025-01-02T03:04:05Z",
+            "id": "event-1",
+            "cwd": "/tmp/repo",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "git_diff",
+                        "input": {
+                            "paths": ["src/lib.rs"],
+                            "commit": "HEAD~1"
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": "diff output truncated"
+                    }
+                ]
+            }
+        });
+
+        let entry = ClaudeParsedEntry::parse(raw).expect("parse claude entry");
+        let event = entry.to_event(false).expect("convert claude tool event");
+
+        expect![[r#"
+            {
+              "actor": "assistant",
+              "category": "assistant",
+              "label": "Assistant",
+              "text": "Tool call: git_diff\n{\n  \"commit\": \"HEAD~1\",\n  \"paths\": [\n    \"src/lib.rs\"\n  ]\n}\n\ndiff output truncated",
+              "data": {
+                "id": "event-1",
+                "working_dir": "/tmp/repo"
+              },
+              "timestamp": "2025-01-02T03:04:05Z"
+            }"#]]
+        .assert_eq(&snapshot(&event));
+    }
+}
+
 fn to_title_case(value: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     for segment in value.split(|c: char| c == '_' || c == '-' || c == ' ') {

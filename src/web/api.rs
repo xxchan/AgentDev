@@ -23,7 +23,9 @@ use crate::{
         MAX_PROCESSES_PER_WORKTREE, ProcessRecord, ProcessRegistry,
         ProcessStatus as RegistryProcessStatus, canonicalize_cwd,
     },
-    sessions::{SessionEvent, SessionRecord, canonicalize as canonicalize_session_path, default_providers},
+    sessions::{
+        SessionEvent, SessionRecord, canonicalize as canonicalize_session_path, default_providers,
+    },
     state::{WorktreeInfo, XlaudeState},
 };
 use rayon::prelude::*;

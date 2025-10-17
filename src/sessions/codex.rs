@@ -183,8 +183,10 @@ impl CodexParsedEntry {
                         record.id = id.clone();
                     }
                     if record.originator.is_none() {
-                        if let Some(originator) =
-                            payload.originator.as_ref().or(self.data.originator.as_ref())
+                        if let Some(originator) = payload
+                            .originator
+                            .as_ref()
+                            .or(self.data.originator.as_ref())
                         {
                             record.originator = Some(originator.clone());
                         }
@@ -254,12 +256,7 @@ impl CodexParsedEntry {
                 return Some(dir.to_string());
             }
         }
-        if let Some(dir) = self
-            .data
-            .extra
-            .get("cwd")
-            .and_then(|value| value.as_str())
-        {
+        if let Some(dir) = self.data.extra.get("cwd").and_then(|value| value.as_str()) {
             return Some(dir.to_string());
         }
         extract_working_dir_from_message(&self.raw)
@@ -818,4 +815,62 @@ fn codex_format_content_item(item: &Value) -> Option<String> {
 
 fn pretty_json(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use expect_test::expect;
+    use serde_json::json;
+
+    fn snapshot(event: &SessionEvent) -> String {
+        serde_json::to_string_pretty(event).expect("serialize event")
+    }
+
+    #[test]
+    fn tool_use_event_snapshot() {
+        let raw = json!({
+            "type": "event_msg",
+            "timestamp": "2025-01-02T03:04:05Z",
+            "payload": {
+                "type": "tool_use",
+                "role": "assistant",
+                "name": "shell",
+                "input": {
+                    "command": "git status",
+                    "timeout": 30
+                },
+                "cwd": "/tmp/repo"
+            }
+        });
+
+        let entry = CodexParsedEntry::parse(raw).expect("parse codex entry");
+        let event = entry.to_event(false).expect("convert codex tool event");
+
+        expect![[r#"
+            {
+              "actor": "assistant",
+              "category": "tool_use",
+              "label": "Assistant",
+              "text": "{\n  \"cwd\": \"/tmp/repo\",\n  \"input\": {\n    \"command\": \"git status\",\n    \"timeout\": 30\n  },\n  \"name\": \"shell\",\n  \"role\": \"assistant\",\n  \"type\": \"tool_use\"\n}",
+              "data": {
+                "content": null,
+                "cwd": "/tmp/repo",
+                "id": null,
+                "input": {
+                  "command": "git status",
+                  "timeout": 30
+                },
+                "instructions": null,
+                "message": null,
+                "name": "shell",
+                "originator": null,
+                "role": "assistant",
+                "type": "tool_use",
+                "working_dir": "/tmp/repo"
+              },
+              "timestamp": "2025-01-02T03:04:05Z"
+            }"#]]
+        .assert_eq(&snapshot(&event));
+    }
 }

@@ -463,7 +463,7 @@ function SessionGroupSidebar({
           </div>
         </div>
       ) : null}
-      <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-3">
+      <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-6">
         {sections.length === 0 ? (
           <div className="px-3 py-4 text-xs text-muted-foreground/80">
             {isLoading ? 'Collecting session metadata…' : 'No session groups found.'}
@@ -623,7 +623,7 @@ function SessionSummaryList({
           </div>
         </div>
       </div>
-      <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-3">
+      <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-6">
         {sessions.length === 0 ? (
           <div className="px-4 py-6 text-sm text-muted-foreground/80">
             {isLoading ? 'Loading sessions…' : 'No sessions match your filters.'}
@@ -677,16 +677,16 @@ function SessionSummaryList({
                         {session.session_id}
                       </span>
                     </div>
-                    <div className="space-y-1 text-sm text-foreground/90">
+                    <div className="space-y-1 text-sm text-foreground/90 pr-scroll-gutter-lg">
                       {showFirstUserPreview ? (
-                        <div className="whitespace-pre-wrap break-words">
+                        <div className="whitespace-pre-wrap break-all">
                           <span className="font-semibold text-muted-foreground">
                             First user:{' '}
                           </span>
                           {firstUserPreview}
                         </div>
                       ) : null}
-                      <div className="whitespace-pre-wrap break-words">
+                      <div className="whitespace-pre-wrap break-all">
                         <span className="font-semibold text-muted-foreground">
                           {previewLabel}:{' '}
                         </span>

@@ -599,3 +599,69 @@ fn to_title_case(value: &str) -> String {
 fn kimi_pretty_json(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use expect_test::expect;
+    use serde_json::json;
+
+    fn snapshot(event: &SessionEvent) -> String {
+        serde_json::to_string_pretty(event).expect("serialize event")
+    }
+
+    #[test]
+    fn tool_use_event_snapshot() {
+        let raw = json!({
+            "timestamp": "2025-01-02T03:04:05Z",
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "git_diff",
+                        "arguments": "{\"paths\": [\"src/lib.rs\"], \"commit\": \"HEAD\"}"
+                    }
+                }
+            ]
+        });
+
+        let entry = KimiParsedEntry::parse(raw).expect("parse kimi entry");
+        let event = entry.to_event(false).expect("convert kimi tool event");
+
+        expect![[r#"
+            {
+              "actor": "assistant",
+              "category": "assistant",
+              "label": "Assistant",
+              "text": "Tool calls:\n[\n  {\n    \"function\": {\n      \"arguments\": \"{\\\"paths\\\": [\\\"src/lib.rs\\\"], \\\"commit\\\": \\\"HEAD\\\"}\",\n      \"name\": \"git_diff\"\n    },\n    \"id\": \"call-1\",\n    \"type\": \"function\"\n  }\n]",
+              "data": {
+                "arguments": null,
+                "content": null,
+                "function_call": null,
+                "id": null,
+                "input_tokens": null,
+                "message": null,
+                "name": null,
+                "output_tokens": null,
+                "role": "assistant",
+                "timestamp": "2025-01-02T03:04:05Z",
+                "token_count": null,
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"paths\": [\"src/lib.rs\"], \"commit\": \"HEAD\"}",
+                      "name": "git_diff"
+                    },
+                    "id": "call-1",
+                    "type": "function"
+                  }
+                ],
+                "type": null
+              },
+              "timestamp": "2025-01-02T03:04:05Z"
+            }"#]]
+        .assert_eq(&snapshot(&event));
+    }
+}
