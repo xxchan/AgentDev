@@ -24,14 +24,37 @@ pub(super) fn serve(uri: Uri) -> Response {
     #[cfg(agentdev_ui_built)]
     {
         let path = uri.path().trim_start_matches('/');
-        let target = if path.is_empty() || !path.contains('.') {
-            "index.html"
-        } else {
-            path
+        let mut candidates: Vec<String> = Vec::new();
+        let mut push_candidate = |value: String| {
+            if value.is_empty() {
+                return;
+            }
+            if !candidates.iter().any(|existing| existing == &value) {
+                candidates.push(value);
+            }
         };
 
-        if let Some(asset) = Assets::get(target) {
-            return response_from_asset(target, asset);
+        if path.is_empty() {
+            push_candidate("index.html".to_string());
+        } else {
+            let without_trailing = path.trim_end_matches('/');
+            if path.contains('.') {
+                push_candidate(path.to_string());
+                if without_trailing != path {
+                    push_candidate(without_trailing.to_string());
+                }
+            } else if without_trailing.is_empty() {
+                push_candidate("index.html".to_string());
+            } else {
+                push_candidate(format!("{}/index.html", without_trailing));
+                push_candidate(without_trailing.to_string());
+            }
+        }
+
+        for candidate in &candidates {
+            if let Some(asset) = Assets::get(candidate) {
+                return response_from_asset(candidate, asset);
+            }
         }
 
         if let Some(asset) = Assets::get("index.html") {

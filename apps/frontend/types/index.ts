@@ -22,12 +22,22 @@ export interface WorktreeCommitsAhead {
   commits: WorktreeCommitInfo[];
 }
 
-export interface WorktreeSessionSummary {
+export interface BaseSessionSummary {
   provider: string;
   session_id: string;
   last_user_message: string;
   last_timestamp?: string | null;
   user_messages: string[];
+}
+
+export type WorktreeSessionSummary = BaseSessionSummary;
+
+export interface SessionSummary extends BaseSessionSummary {
+  worktree_id?: string | null;
+  worktree_name?: string | null;
+  repo_name?: string | null;
+  branch?: string | null;
+  working_dir?: string | null;
 }
 
 export interface WorktreeSummary {
@@ -50,6 +60,10 @@ export interface WorktreeSummary {
 
 export interface WorktreeListResponse {
   worktrees: WorktreeSummary[];
+}
+
+export interface SessionListResponse {
+  sessions: SessionSummary[];
 }
 
 export interface WorktreeCommitDiff {

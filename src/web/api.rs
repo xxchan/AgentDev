@@ -34,6 +34,25 @@ pub struct WorktreeSessionSummary {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+pub struct SessionSummaryPayload {
+    pub provider: String,
+    pub session_id: String,
+    pub last_user_message: String,
+    pub last_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub user_messages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct WorktreeGitStatusPayload {
     pub branch: String,
     pub upstream: Option<String>,
@@ -125,6 +144,11 @@ pub struct LaunchWorktreeCommandResponse {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct WorktreeListResponse {
     pub worktrees: Vec<WorktreeSummary>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionListResponse {
+    pub sessions: Vec<SessionSummaryPayload>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -409,6 +433,23 @@ fn match_sessions_for_worktree(
     summaries
 }
 
+/// GET /api/sessions - List all known sessions across providers
+pub async fn get_sessions() -> impl IntoResponse {
+    match tokio::task::spawn_blocking(collect_all_sessions).await {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to collect sessions: {err}"),
+        )
+            .into_response(),
+        Err(join_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Session collection task failed: {join_err}"),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/worktrees - Get enriched worktree metadata
 pub async fn get_worktrees() -> impl IntoResponse {
     match tokio::task::spawn_blocking(collect_worktree_summaries).await {
@@ -502,6 +543,143 @@ pub async fn post_worktree_command(
         )
             .into_response(),
     }
+}
+
+fn collect_all_sessions() -> Result<SessionListResponse> {
+    let profiler = WorktreeProfiler::new();
+    let overall_start = if profiler.enabled() {
+        Some(Instant::now())
+    } else {
+        None
+    };
+
+    let state = profiler.measure_result("state.load", || XlaudeState::load())?;
+
+    let worktree_entries: Vec<(String, WorktreeInfo)> = state
+        .worktrees
+        .iter()
+        .map(|(id, info)| (id.clone(), info.clone()))
+        .collect();
+
+    struct WorktreeLocator {
+        id: String,
+        info: WorktreeInfo,
+        base_path: PathBuf,
+    }
+
+    let locators: Vec<WorktreeLocator> = worktree_entries
+        .into_iter()
+        .map(|(id, info)| {
+            let canonical = canonicalize_session_path(&info.path);
+            let base_path = canonical.unwrap_or_else(|| info.path.clone());
+            WorktreeLocator {
+                id,
+                info,
+                base_path,
+            }
+        })
+        .collect();
+
+    let external_sessions = collect_external_sessions(&profiler);
+
+    let mut sessions: Vec<SessionSummaryPayload> = external_sessions
+        .iter()
+        .map(|normalized| {
+            let working_dir_path = normalized
+                .canonical_dir
+                .as_ref()
+                .map(|path| path.as_path())
+                .or_else(|| {
+                    normalized
+                        .record
+                        .working_dir
+                        .as_ref()
+                        .map(|path| path.as_path())
+                });
+
+            let matched = working_dir_path.and_then(|dir| {
+                locators
+                    .iter()
+                    .find(|locator| dir.starts_with(locator.base_path.as_path()))
+            });
+
+            let (worktree_id, worktree_name, repo_name, branch) = matched
+                .map(|locator| {
+                    (
+                        Some(locator.id.clone()),
+                        Some(locator.info.name.clone()),
+                        Some(locator.info.repo_name.clone()),
+                        Some(locator.info.branch.clone()),
+                    )
+                })
+                .unwrap_or((None, None, None, None));
+
+            let working_dir = working_dir_path
+                .map(|path| path.display().to_string())
+                .or_else(|| {
+                    normalized
+                        .record
+                        .working_dir
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                });
+
+            SessionSummaryPayload {
+                provider: normalized.record.provider.clone(),
+                session_id: normalized.record.id.clone(),
+                last_user_message: normalized
+                    .record
+                    .last_user_message
+                    .clone()
+                    .unwrap_or_default(),
+                last_timestamp: normalized.record.last_timestamp,
+                user_messages: normalized.record.user_messages.clone(),
+                worktree_id,
+                worktree_name,
+                repo_name,
+                branch,
+                working_dir,
+            }
+        })
+        .collect();
+
+    for locator in &locators {
+        let claude_sessions =
+            profiler.measure_worktree(locator.id.as_str(), "sessions.claude_all", || {
+                get_claude_sessions(&locator.info.path)
+            });
+        for session in claude_sessions {
+            sessions.push(SessionSummaryPayload {
+                provider: "claude".to_string(),
+                session_id: session.id,
+                last_user_message: session.last_user_message,
+                last_timestamp: session.last_timestamp,
+                user_messages: session.user_messages,
+                worktree_id: Some(locator.id.clone()),
+                worktree_name: Some(locator.info.name.clone()),
+                repo_name: Some(locator.info.repo_name.clone()),
+                branch: Some(locator.info.branch.clone()),
+                working_dir: Some(locator.info.path.display().to_string()),
+            });
+        }
+    }
+
+    sessions.sort_by(|a, b| {
+        b.last_timestamp
+            .cmp(&a.last_timestamp)
+            .then_with(|| a.provider.cmp(&b.provider))
+            .then_with(|| a.session_id.cmp(&b.session_id))
+    });
+
+    if let Some(start) = overall_start {
+        println!(
+            "[profile/sessions] total took {:?} ({} sessions)",
+            start.elapsed(),
+            sessions.len()
+        );
+    }
+
+    Ok(SessionListResponse { sessions })
 }
 
 fn collect_worktree_summaries() -> Result<WorktreeListResponse> {

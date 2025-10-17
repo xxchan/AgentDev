@@ -3,7 +3,7 @@ import { ReactNode } from 'react';
 interface MainLayoutProps {
   sidebar: ReactNode;
   main: ReactNode;
-  bottom: ReactNode;
+  bottom?: ReactNode;
 }
 
 export default function MainLayout({ sidebar, main, bottom }: MainLayoutProps) {
@@ -39,9 +39,11 @@ export default function MainLayout({ sidebar, main, bottom }: MainLayoutProps) {
           </main>
 
           {/* Bottom processes panel */}
-          <div className="h-80 border-t border-border bg-card">
-            {bottom}
-          </div>
+          {bottom ? (
+            <div className="h-80 border-t border-border bg-card">
+              {bottom}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

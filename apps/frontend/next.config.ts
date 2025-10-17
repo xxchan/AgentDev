@@ -1,18 +1,24 @@
 import type { NextConfig } from "next";
 
+const isDevelopment = process.env.NODE_ENV === "development";
+
 const nextConfig: NextConfig = {
-  output: "export",
   trailingSlash: true,
   images: {
     unoptimized: true,
   },
-  // Disable server-side features for static export
   experimental: {
     esmExternals: true,
   },
 };
 
-if (process.env.NODE_ENV === "development") {
+nextConfig.distDir = isDevelopment ? ".next-dev" : ".next-prod";
+
+if (!isDevelopment) {
+  nextConfig.output = "export";
+}
+
+if (isDevelopment) {
   const rawBase =
     process.env.NEXT_PUBLIC_AGENTDEV_API_BASE ?? "http://localhost:3000";
   const normalizedBase = rawBase.replace(/\/$/, "");

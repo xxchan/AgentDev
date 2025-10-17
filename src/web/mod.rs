@@ -74,25 +74,7 @@ pub fn run_blocking(options: ServerOptions) -> Result<()> {
 async fn run_async(options: ServerOptions) -> Result<()> {
     println!("Starting agentdev UI server...");
 
-    let app = Router::new()
-        // API routes
-        .route("/api/worktrees", get(get_worktrees))
-        .route("/api/worktrees/:worktree_id", get(get_worktree))
-        .route(
-            "/api/worktrees/:worktree_id/git",
-            get(get_worktree_git_details),
-        )
-        .route(
-            "/api/worktrees/:worktree_id/processes",
-            get(get_worktree_processes),
-        )
-        .route(
-            "/api/worktrees/:worktree_id/commands",
-            post(post_worktree_command),
-        )
-        // Static file serving (fallback to index.html for SPA)
-        .fallback(serve_frontend)
-        .layer(CorsLayer::permissive());
+    let app = build_router();
 
     let port = options
         .port
@@ -124,6 +106,44 @@ async fn run_async(options: ServerOptions) -> Result<()> {
     Ok(())
 }
 
+fn build_router() -> Router {
+    Router::new()
+        // API routes
+        .route("/api/sessions", get(get_sessions))
+        .route("/api/sessions/", get(get_sessions))
+        .route("/api/worktrees", get(get_worktrees))
+        .route("/api/worktrees/", get(get_worktrees))
+        .route("/api/worktrees/:worktree_id", get(get_worktree))
+        .route("/api/worktrees/:worktree_id/", get(get_worktree))
+        .route(
+            "/api/worktrees/:worktree_id/git",
+            get(get_worktree_git_details),
+        )
+        .route(
+            "/api/worktrees/:worktree_id/git/",
+            get(get_worktree_git_details),
+        )
+        .route(
+            "/api/worktrees/:worktree_id/processes",
+            get(get_worktree_processes),
+        )
+        .route(
+            "/api/worktrees/:worktree_id/processes/",
+            get(get_worktree_processes),
+        )
+        .route(
+            "/api/worktrees/:worktree_id/commands",
+            post(post_worktree_command),
+        )
+        .route(
+            "/api/worktrees/:worktree_id/commands/",
+            post(post_worktree_command),
+        )
+        // Static file serving (fallback to index.html for SPA)
+        .fallback(serve_frontend)
+        .layer(CorsLayer::permissive())
+}
+
 async fn serve_frontend(uri: axum::http::Uri) -> impl IntoResponse {
     frontend::serve(uri)
 }
@@ -143,4 +163,135 @@ fn open_browser(port: u16) -> Result<()> {
         .spawn()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+    };
+    use tempfile::TempDir;
+    use tower::ServiceExt;
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set<K>(key: &'static str, value: K) -> Self
+        where
+            K: AsRef<std::ffi::OsStr>,
+        {
+            let original = std::env::var_os(key);
+            // SAFETY: Setting environment variables is process-global. Tests use this helper
+            // to isolate environment-dependent paths and restore the previous value on drop.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(ref value) = self.original {
+                unsafe {
+                    std::env::set_var(self.key, value);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    fn setup_test_env() -> (TempDir, EnvGuard, EnvGuard) {
+        let temp = TempDir::new().expect("create temp dir");
+        let home_guard = EnvGuard::set("HOME", temp.path());
+        let config_dir = temp.path().join(".config/xlaude");
+        if let Err(err) = std::fs::create_dir_all(&config_dir) {
+            panic!("failed to create config dir for test: {err}");
+        }
+        let config_guard = EnvGuard::set("XLAUDE_CONFIG_DIR", &config_dir);
+        (temp, home_guard, config_guard)
+    }
+
+    #[tokio::test]
+    async fn worktrees_endpoint_accepts_trailing_slash() {
+        let (_temp, _home_guard, _config_guard) = setup_test_env();
+        let app = build_router();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/worktrees")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("worktrees request without slash");
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert!(
+            content_type.starts_with("application/json"),
+            "expected JSON content-type, got {content_type}"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/worktrees/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("worktrees request with trailing slash");
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert!(
+            content_type.starts_with("application/json"),
+            "expected JSON content-type, got {content_type}"
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_detail_trailing_slash_returns_not_found_json() {
+        let (_temp, _home_guard, _config_guard) = setup_test_env();
+        let response = build_router()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/worktrees/nonexistent/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("worktree detail request with trailing slash");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert_eq!(
+            content_type, "text/plain; charset=utf-8",
+            "expected plain text error response, got {content_type}"
+        );
+    }
 }

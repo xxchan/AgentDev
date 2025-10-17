@@ -1,5 +1,12 @@
 'use client';
 
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import { apiUrl } from '@/lib/api';
 import { WorktreeSummary } from '@/types';
 import WorktreeGitSection from './WorktreeGitSection';
 import WorktreeSessions from './WorktreeSessions';
@@ -50,6 +57,77 @@ export default function WorktreeDetails({
   worktree,
   isLoading,
 }: WorktreeDetailsProps) {
+  const commandEndpoint = useMemo(() => {
+    if (!worktree) {
+      return null;
+    }
+    return `/api/worktrees/${encodeURIComponent(worktree.id)}/commands`;
+  }, [worktree]);
+
+  const [isLaunchingVsCode, setIsLaunchingVsCode] = useState(false);
+  const [vsCodeFeedback, setVsCodeFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    setIsLaunchingVsCode(false);
+    setVsCodeFeedback(null);
+  }, [commandEndpoint]);
+
+  useEffect(() => {
+    if (!vsCodeFeedback || vsCodeFeedback.type !== 'success') {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setVsCodeFeedback(null);
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [vsCodeFeedback]);
+
+  const handleOpenVsCode = useCallback(async () => {
+    if (!commandEndpoint) {
+      return;
+    }
+
+    setIsLaunchingVsCode(true);
+    setVsCodeFeedback(null);
+
+    try {
+      const response = await fetch(apiUrl(commandEndpoint), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command: 'code .',
+          description: 'Open worktree in VSCode',
+        }),
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(
+          message || `Failed to launch VSCode (status ${response.status})`,
+        );
+      }
+
+      setVsCodeFeedback({
+        type: 'success',
+        message: 'VSCode launch requested. Check Processes for status.',
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to open in VSCode';
+      setVsCodeFeedback({
+        type: 'error',
+        message,
+      });
+    } finally {
+      setIsLaunchingVsCode(false);
+    }
+  }, [commandEndpoint]);
+
   if (!worktree) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -152,8 +230,16 @@ export default function WorktreeDetails({
               <p className="mt-1 text-sm text-gray-500">
                 Managed as <span className="font-mono">{worktree.id}</span>
               </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleOpenVsCode}
+                disabled={!commandEndpoint || isLaunchingVsCode}
+                className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 disabled:opacity-60"
+              >
+                {isLaunchingVsCode ? 'Opening…' : 'Open in VSCode'}
+              </button>
               <button
                 type="button"
                 disabled
@@ -188,6 +274,17 @@ export default function WorktreeDetails({
               </button>
             </div>
           </div>
+          {vsCodeFeedback && (
+            <div
+              className={`mt-4 rounded-md border px-3 py-2 text-xs ${
+                vsCodeFeedback.type === 'success'
+                  ? 'border-green-200 bg-green-50 text-green-700'
+                  : 'border-rose-200 bg-rose-50 text-rose-700'
+              }`}
+            >
+              {vsCodeFeedback.message}
+            </div>
+          )}
         </section>
 
         <div className="space-y-6 pb-12">
