@@ -644,7 +644,10 @@ fn attach_working_dir(data: Option<Value>, working_dir: Option<String>) -> Optio
     }
 }
 
-fn extract_codex_tool_event(payload: &Value, working_dir: Option<&str>) -> Option<SessionToolEvent> {
+fn extract_codex_tool_event(
+    payload: &Value,
+    working_dir: Option<&str>,
+) -> Option<SessionToolEvent> {
     let object = payload.as_object()?;
     let entry_type = object
         .get("type")

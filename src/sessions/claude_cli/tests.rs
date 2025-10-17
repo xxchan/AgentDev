@@ -1,6 +1,6 @@
 use super::*;
 use expect_test::expect;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};

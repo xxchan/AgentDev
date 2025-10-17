@@ -7,11 +7,11 @@ use std::thread;
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::config::{agent_config_path, load_agent_config, split_cmdline};
-use crate::git::get_repo_name;
-use crate::state::XlaudeState;
-use crate::tmux::TmuxManager;
-use crate::utils::{generate_random_name, sanitize_branch_name};
+use agentdev::config::{agent_config_path, load_agent_config, split_cmdline};
+use agentdev::git::get_repo_name;
+use agentdev::state::XlaudeState;
+use agentdev::tmux::TmuxManager;
+use agentdev::utils::{generate_random_name, sanitize_branch_name};
 use dialoguer::Select;
 
 use crate::commands::handle_dashboard;

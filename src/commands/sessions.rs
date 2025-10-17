@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::Serialize;
 
-use crate::sessions::{SessionRecord, canonicalize, default_providers};
-use crate::state::{WorktreeInfo, XlaudeState};
+use agentdev::sessions::{SessionRecord, canonicalize, default_providers};
+use agentdev::state::{WorktreeInfo, XlaudeState};
 
 #[derive(Debug, Serialize)]
 struct JsonSession {

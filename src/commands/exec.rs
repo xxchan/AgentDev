@@ -12,7 +12,7 @@ use agentdev::process_registry::{
 };
 
 use crate::input::smart_select;
-use crate::state::{WorktreeInfo, XlaudeState};
+use agentdev::state::{WorktreeInfo, XlaudeState};
 
 /// Execute an arbitrary command inside a managed worktree.
 pub fn handle_exec(worktree_flag: Option<String>, mut raw_args: Vec<String>) -> Result<()> {

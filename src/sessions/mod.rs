@@ -52,6 +52,21 @@ impl SessionRecord {
         self.working_dir = Some(PathBuf::from(path));
     }
 
+    fn should_skip_user_message(&self, message: &str) -> bool {
+        if !self.provider.eq_ignore_ascii_case("codex") {
+            return false;
+        }
+        let normalized = message.trim();
+        if normalized.is_empty() {
+            return true;
+        }
+        let lower = normalized.to_ascii_lowercase();
+        if lower == "codex agents.md" {
+            return true;
+        }
+        lower.contains("<user_instructions>")
+    }
+
     pub fn ingest_event(&mut self, event: &SessionEvent) {
         if let Some(timestamp) = event.timestamp {
             if self
@@ -66,7 +81,7 @@ impl SessionRecord {
             if actor.eq_ignore_ascii_case("user") {
                 if let Some(text) = event.summary_text.as_ref().or_else(|| event.text.as_ref()) {
                     let trimmed = text.trim();
-                    if !trimmed.is_empty() {
+                    if !trimmed.is_empty() && !self.should_skip_user_message(trimmed) {
                         let summary_text = trimmed.to_string();
                         if self.first_user_message.is_none() {
                             self.first_user_message = Some(summary_text.clone());

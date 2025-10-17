@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 
 use crate::input::{get_command_arg, smart_select};
-use crate::state::XlaudeState;
+use agentdev::state::XlaudeState;
 
 pub fn handle_dir(name: Option<String>) -> Result<()> {
     let state = XlaudeState::load()?;

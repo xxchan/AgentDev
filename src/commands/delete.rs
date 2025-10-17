@@ -2,11 +2,11 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use std::io;
 
-use crate::git::{execute_git, has_unpushed_commits, is_working_tree_clean};
 use crate::input::{get_command_arg, smart_confirm};
-use crate::state::{WorktreeInfo, XlaudeState};
-use crate::tmux::TmuxManager;
-use crate::utils::execute_in_dir;
+use agentdev::git::{execute_git, has_unpushed_commits, is_working_tree_clean};
+use agentdev::state::{WorktreeInfo, XlaudeState};
+use agentdev::tmux::TmuxManager;
+use agentdev::utils::execute_in_dir;
 
 /// Represents the result of various checks performed before deletion
 struct DeletionChecks {

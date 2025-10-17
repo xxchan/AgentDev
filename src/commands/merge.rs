@@ -5,12 +5,12 @@ use clap::ValueEnum;
 use colored::Colorize;
 
 use super::delete::handle_delete;
-use crate::git::{
+use crate::input::{get_command_arg, smart_confirm, smart_select};
+use agentdev::git::{
     ahead_behind, execute_git, get_current_branch, get_default_branch, is_working_tree_clean,
 };
-use crate::input::{get_command_arg, smart_confirm, smart_select};
-use crate::state::{WorktreeInfo, XlaudeState};
-use crate::utils::execute_in_dir;
+use agentdev::state::{WorktreeInfo, XlaudeState};
+use agentdev::utils::execute_in_dir;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 #[clap(rename_all = "kebab-case")]

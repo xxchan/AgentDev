@@ -3,9 +3,9 @@ use colored::Colorize;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::git::list_worktrees;
-use crate::state::XlaudeState;
-use crate::utils::execute_in_dir;
+use agentdev::git::list_worktrees;
+use agentdev::state::XlaudeState;
+use agentdev::utils::execute_in_dir;
 
 pub fn handle_clean() -> Result<()> {
     let mut state = XlaudeState::load()?;

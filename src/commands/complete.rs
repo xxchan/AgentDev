@@ -1,8 +1,8 @@
 use anyhow::Result;
 use std::path::Path;
 
-use crate::claude::get_claude_sessions;
-use crate::state::{WorktreeInfo, XlaudeState};
+use agentdev::claude::get_claude_sessions;
+use agentdev::state::{WorktreeInfo, XlaudeState};
 
 pub fn handle_complete_worktrees(format: &str) -> Result<()> {
     // Silently load state, return empty on any error

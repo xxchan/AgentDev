@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
-use crate::git;
-use crate::state::XlaudeState;
+use agentdev::git;
+use agentdev::state::XlaudeState;
 
 pub fn handle_rename(old_name: String, new_name: String) -> Result<()> {
     let repo = git::get_repo_name()?;

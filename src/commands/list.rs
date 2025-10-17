@@ -4,9 +4,11 @@ use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::claude::get_claude_sessions;
-use crate::git::{HeadCommitInfo, WorktreeGitStatus, head_commit_info, summarize_worktree_status};
-use crate::state::XlaudeState;
+use agentdev::claude::get_claude_sessions;
+use agentdev::git::{
+    HeadCommitInfo, WorktreeGitStatus, head_commit_info, summarize_worktree_status,
+};
+use agentdev::state::XlaudeState;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct JsonSessionInfo {

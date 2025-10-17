@@ -3,9 +3,9 @@ use chrono::Utc;
 use colored::Colorize;
 use std::fs;
 
-use crate::git::{get_current_branch, get_repo_name, is_in_worktree};
-use crate::state::{WorktreeInfo, XlaudeState};
-use crate::utils::sanitize_branch_name;
+use agentdev::git::{get_current_branch, get_repo_name, is_in_worktree};
+use agentdev::state::{WorktreeInfo, XlaudeState};
+use agentdev::utils::sanitize_branch_name;
 
 pub fn handle_add(name: Option<String>) -> Result<()> {
     // Check if we're in a git repository

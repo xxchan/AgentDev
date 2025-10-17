@@ -6,12 +6,12 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::commands::open::handle_open;
-use crate::git::{
+use crate::input::{get_command_arg, is_piped_input, smart_confirm};
+use agentdev::git::{
     execute_git, extract_repo_name_from_url, get_repo_name, list_worktrees, update_submodules,
 };
-use crate::input::{get_command_arg, is_piped_input, smart_confirm};
-use crate::state::{WorktreeInfo, XlaudeState};
-use crate::utils::sanitize_branch_name;
+use agentdev::state::{WorktreeInfo, XlaudeState};
+use agentdev::utils::sanitize_branch_name;
 
 pub fn handle_create(name: Option<String>, agent: Option<String>) -> Result<()> {
     handle_create_in_dir(name, None, agent)

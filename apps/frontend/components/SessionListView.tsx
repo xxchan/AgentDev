@@ -3,6 +3,7 @@
 import { ReactNode, useState } from "react";
 import type { SessionEvent, SessionToolEvent } from "@/types";
 import { ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/24/outline";
+import { SquareFunction } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProviderBadgeClasses } from "@/lib/providers";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -181,37 +182,35 @@ function buildToolRender(
   const accent = getMessageAccent(detail);
   const badgeTone =
     tool.phase === "use"
-      ? "border-slate-200 bg-slate-100 text-slate-600"
-      : "border-stone-200 bg-stone-100 text-stone-600";
+      ? "border-zinc-200 bg-zinc-50 text-zinc-600"
+      : "border-zinc-200 bg-zinc-50 text-zinc-600";
   const collapseCandidates = sections.map((section) => section.formatted);
   const shouldCollapse = collapseCandidates.some((value) => shouldCollapsePlainMessage(value));
   const accentDefault = accent.defaultCollapsed ?? false;
-  const collapsible = shouldCollapse || accentDefault;
+  const collapsible = true;
   const defaultCollapsed = accentDefault || shouldCollapse;
   const header = (
-    <div className="flex w-full items-center justify-between gap-2">
-      <div className="flex items-center gap-2">
+    <div className="flex w-full flex-col gap-1">
+      <span
+        className={cn(
+          "text-xs font-semibold uppercase tracking-wide",
+          accent.title ?? "text-gray-600",
+        )}
+      >
+        {title}
+      </span>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+        {subtitle ? <span>{subtitle}</span> : null}
         <span
           className={cn(
-            "inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold leading-none",
+            "inline-flex items-center rounded-full border px-1.5 py-0.5 font-semibold leading-none",
             badgeTone,
           )}
         >
-          f
+          <SquareFunction className="h-3.5 w-3.5" aria-hidden="true" />
         </span>
-        <div className="flex flex-col">
-          <span
-            className={cn(
-              "text-xs font-semibold uppercase tracking-wide",
-              accent.title ?? "text-gray-600",
-            )}
-          >
-            {title}
-          </span>
-          {subtitle ? <span className="text-xs text-gray-500">{subtitle}</span> : null}
-        </div>
+        <span className="font-medium text-zinc-500">{phaseLabel}</span>
       </div>
-      <span className="text-xs font-medium text-gray-400">{phaseLabel}</span>
     </div>
   );
 
@@ -222,7 +221,7 @@ function buildToolRender(
           {metadataItems.map((item) => (
             <div
               key={`${item.label}:${item.value}`}
-              className="rounded border border-gray-200 bg-white/80 px-3 py-2"
+              className="rounded border border-zinc-200 bg-white/80 px-3 py-2"
             >
               <dt className="text-xs font-semibold uppercase tracking-wide text-gray-600">
                 {item.label}
@@ -235,7 +234,7 @@ function buildToolRender(
       {sections.map((section) => (
         <div
           key={section.key}
-          className="rounded border border-gray-200 bg-white/80 px-3 py-2"
+          className="rounded border border-zinc-200 bg-white/80 px-3 py-2"
         >
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
             {section.label}
@@ -326,12 +325,14 @@ function parseUserMessage(message: string): ParsedUserMessage {
     const body = tagMatch[2].trim();
 
     if (tag === "user_instructions") {
-      const derivedTitle = deriveInstructionTitle(body);
+      // const derivedTitle = deriveInstructionTitle(body);
+      const derivedTitle = "";
+
       return {
         kind: "special",
         message: {
           type: "user_instructions",
-          title: "Codex user instructions",
+          title: "Codex AGENTS.md",
           headline: derivedTitle ?? undefined,
           collapsible: true,
           defaultCollapsed: true,
@@ -478,14 +479,14 @@ function getMessageAccent(detail: SessionEvent): MessageAccent {
       };
     case "tool_use":
       return {
-        container: "border-slate-200 bg-slate-50",
-        title: "text-slate-700",
+        container: "border-zinc-200 bg-zinc-50",
+        title: "text-zinc-700",
         defaultCollapsed: true,
       };
     case "tool_result":
       return {
-        container: "border-stone-200 bg-stone-50",
-        title: "text-stone-700",
+        container: "border-zinc-200 bg-zinc-50",
+        title: "text-zinc-700",
         defaultCollapsed: true,
       };
     case "response_item":
@@ -540,8 +541,8 @@ function buildDefaultRender(
   if (parsed.kind === "special") {
     const special = parsed.message;
     const titlePrefix = `#${index + 1}`;
-    const segments: string[] = [];
-    const addSegment = (value?: string | null) => {
+    const titleSegments: string[] = [];
+    const addTitleSegment = (value?: string | null) => {
       if (!value) {
         return;
       }
@@ -550,19 +551,34 @@ function buildDefaultRender(
         return;
       }
       const lower = trimmed.toLowerCase();
-      if (!segments.some((segment) => segment.toLowerCase() === lower)) {
-        segments.push(trimmed);
+      if (!titleSegments.some((segment) => segment.toLowerCase() === lower)) {
+        titleSegments.push(trimmed);
       }
     };
+    addTitleSegment(detail.label ?? null);
+    addTitleSegment(special.title);
+    addTitleSegment(special.headline ?? null);
 
-    addSegment(special.title);
-    addSegment(special.headline ?? null);
-    addSegment(detail.label ?? null);
-
-    const composedTitle =
-      segments.length > 0 ? `${titlePrefix} · ${segments.join(" · ")}` : titlePrefix;
+    const headline = special.headline?.trim();
+    const headlineLower = headline?.toLowerCase();
+    const baseSegments =
+      headlineLower !== undefined
+        ? titleSegments.filter((segment) => segment.toLowerCase() !== headlineLower)
+        : titleSegments;
+    const baseTitle =
+      baseSegments.length > 0 ? `${titlePrefix} · ${baseSegments.join(" · ")}` : titlePrefix;
+    const titleNode = headline ? (
+      <span className="inline-flex items-center gap-2">
+        <span>{baseTitle}</span>
+        <span className="normal-case rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
+          {headline}
+        </span>
+      </span>
+    ) : (
+      baseTitle
+    );
     return {
-      title: composedTitle,
+      title: titleNode,
       subtitle,
       content: (
         <>

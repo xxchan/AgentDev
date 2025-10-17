@@ -2,8 +2,8 @@ use anyhow::Result;
 use colored::Colorize;
 
 use crate::input::smart_confirm;
-use crate::state::XlaudeState;
-use crate::tmux::TmuxManager;
+use agentdev::state::{WorktreeInfo, XlaudeState};
+use agentdev::tmux::TmuxManager;
 
 /// CLI entry for `delete-task` that can handle missing arguments gracefully.
 /// If `task_name` is None, print available tasks and a usage hint.
@@ -43,7 +43,7 @@ pub fn handle_delete_task(task_name: String) -> Result<()> {
     let state = XlaudeState::load()?;
 
     // Collect all worktrees for the task
-    let targets: Vec<(String, crate::state::WorktreeInfo)> = state
+    let targets: Vec<(String, WorktreeInfo)> = state
         .worktrees
         .iter()
         .filter_map(|(k, v)| {

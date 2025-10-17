@@ -1,5 +1,6 @@
 // Public modules for agentdev library
 pub mod claude;
+pub mod claude_status;
 pub mod config;
 pub mod git;
 pub mod process_registry;

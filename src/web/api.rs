@@ -1,9 +1,9 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use axum::{
+    Json,
     extract::{Path as AxumPath, Query},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -16,15 +16,15 @@ use std::time::Instant;
 
 use crate::{
     git::{
-        collect_worktree_diff_breakdown, commits_since_merge_base, head_commit_info,
-        summarize_worktree_status, CommitsAhead, HeadCommitInfo, WorktreeGitStatus,
+        CommitsAhead, HeadCommitInfo, WorktreeGitStatus, collect_worktree_diff_breakdown,
+        commits_since_merge_base, head_commit_info, summarize_worktree_status,
     },
     process_registry::{
-        canonicalize_cwd, ProcessRecord, ProcessRegistry, ProcessStatus as RegistryProcessStatus,
-        MAX_PROCESSES_PER_WORKTREE,
+        MAX_PROCESSES_PER_WORKTREE, ProcessRecord, ProcessRegistry,
+        ProcessStatus as RegistryProcessStatus, canonicalize_cwd,
     },
     sessions::{
-        canonicalize as canonicalize_session_path, default_providers, SessionEvent, SessionRecord,
+        SessionEvent, SessionRecord, canonicalize as canonicalize_session_path, default_providers,
     },
     state::{WorktreeInfo, XlaudeState},
 };

@@ -3,11 +3,10 @@ use chrono::Utc;
 use colored::Colorize;
 use std::process::{Command, Stdio};
 
-use crate::git::{get_current_branch, get_repo_name, is_base_branch, is_in_worktree};
 use crate::input::{drain_stdin, get_command_arg, is_piped_input, smart_confirm, smart_select};
-use crate::state::{WorktreeInfo, XlaudeState};
-use crate::utils::resolve_agent_command_with_override;
-use crate::utils::sanitize_branch_name;
+use agentdev::git::{get_current_branch, get_repo_name, is_base_branch, is_in_worktree};
+use agentdev::state::{WorktreeInfo, XlaudeState};
+use agentdev::utils::{resolve_agent_command_with_override, sanitize_branch_name};
 
 pub fn handle_open(name: Option<String>, agent: Option<String>) -> Result<()> {
     let mut state = XlaudeState::load()?;

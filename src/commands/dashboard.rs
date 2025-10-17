@@ -17,11 +17,11 @@ use ratatui::{
 use std::io;
 use std::time::{Duration, Instant};
 
-use crate::claude_status::{ClaudeStatus, ClaudeStatusDetector, PanelStatus, to_panel_status};
 use crate::commands::{MergeStrategy, handle_delete, handle_delete_task, handle_merge};
-use crate::git::{execute_git, get_diff_for_path, recent_git_logs, recent_git_logs_for_path};
-use crate::state::XlaudeState;
-use crate::tmux::{SessionInfo, TmuxManager};
+use agentdev::claude_status::{ClaudeStatus, ClaudeStatusDetector, PanelStatus, to_panel_status};
+use agentdev::git::{execute_git, get_diff_for_path, recent_git_logs, recent_git_logs_for_path};
+use agentdev::state::XlaudeState;
+use agentdev::tmux::{SessionInfo, TmuxManager};
 
 pub struct Dashboard {
     tmux: TmuxManager,

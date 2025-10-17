@@ -1,18 +1,11 @@
+use agentdev::load_agent_config;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
-mod claude;
-mod claude_status;
 mod commands;
 mod completions;
-mod config;
-mod git;
 mod input;
-mod sessions;
-mod state;
-mod tmux;
-mod utils;
 
 use commands::{
     MergeStrategy, handle_add, handle_clean, handle_create, handle_delete, handle_delete_task_cli,
@@ -143,7 +136,7 @@ enum Commands {
 
 fn main() -> Result<()> {
     // Eagerly ensure agent config exists and is loadable on every invocation
-    let _ = crate::config::load_agent_config();
+    let _ = load_agent_config();
 
     let cli = Cli::parse();
 

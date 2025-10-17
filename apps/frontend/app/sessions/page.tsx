@@ -7,9 +7,16 @@ import {
   useState,
   type ChangeEvent,
 } from 'react';
+import { HelpCircle } from 'lucide-react';
 import MainLayout from '@/components/layout/MainLayout';
 import SessionListView, { SessionListItem, SessionListMessage } from '@/components/SessionListView';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useSessions } from '@/hooks/useSessions';
 import {
   SessionDetailMode,
@@ -332,21 +339,57 @@ function isSpecialTaggedUserMessage(message: string): boolean {
   return SPECIAL_MESSAGE_TAGS.has(tag);
 }
 
+function isCodexInstructionPlaceholder(message: string, provider: string): boolean {
+  if (provider.toLowerCase() !== 'codex') {
+    return false;
+  }
+  const normalized = message.trim();
+  if (!normalized) {
+    return false;
+  }
+  const lower = normalized.toLowerCase();
+  if (lower === 'codex agents.md') {
+    return true;
+  }
+  return lower.includes('<user_instructions>');
+}
+
 function collectPlainUserMessages(session: SessionSummary): string[] {
+  const provider = session.provider;
   return getPreviewMessages(session)
     .map((message) => message.trim())
-    .filter((message) => message.length > 0 && !isSpecialTaggedUserMessage(message));
+    .filter(
+      (message) =>
+        message.length > 0 &&
+        !isSpecialTaggedUserMessage(message) &&
+        !isCodexInstructionPlaceholder(message, provider),
+    );
 }
 
 function buildSessionPreview(session: SessionSummary): string {
-  if (session.last_user_message && session.last_user_message.trim().length > 0) {
-    return session.last_user_message.trim();
+  if (session.last_user_message) {
+    const trimmed = session.last_user_message.trim();
+    if (
+      trimmed.length > 0 &&
+      !isCodexInstructionPlaceholder(trimmed, session.provider)
+    ) {
+      return trimmed;
+    }
   }
   const previewMessages = getPreviewMessages(session);
-  for (let index = previewMessages.length - 1; index >= 0; index -= 1) {
-    const candidate = previewMessages[index];
-    if (candidate && candidate.trim().length > 0) {
-      return candidate.trim();
+  if (previewMessages.length > 0) {
+    const plainMessages = collectPlainUserMessages(session);
+    if (plainMessages.length > 0) {
+      const lastPlain = plainMessages[plainMessages.length - 1];
+      if (lastPlain) {
+        return lastPlain;
+      }
+    }
+    for (let index = previewMessages.length - 1; index >= 0; index -= 1) {
+      const candidate = previewMessages[index];
+      if (candidate && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
     }
   }
   return 'No user messages yet';
@@ -632,13 +675,29 @@ function SessionSummaryList({
               </div>
             ) : null}
           </div>
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={handleSearchChange}
-            placeholder="Search sessions"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={handleSearchChange}
+              placeholder="Search sessions"
+              className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Explain session search filters"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                >
+                  <HelpCircle className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="end" className="max-w-xs text-left leading-relaxed">
+                Search matches session ID, provider, worktree name, repo or branch, working directory, and the previewed user messages we keep.
+              </TooltipContent>
+            </Tooltip>
+          </div>
           <div className="flex items-center justify-between text-[0.7rem] text-muted-foreground">
             <span>
               {isLoading ? 'Refreshing…' : `${sessions.length} session${sessions.length === 1 ? '' : 's'}`}
@@ -960,7 +1019,8 @@ export default function SessionsPage() {
       return base;
     }
     return base.filter((session) => {
-      const haystack = [
+      const plainUserMessages = collectPlainUserMessages(session);
+      const haystackParts = [
         session.session_id,
         session.provider,
         session.last_user_message ?? '',
@@ -969,7 +1029,11 @@ export default function SessionsPage() {
         session.repo_name ?? '',
         session.branch ?? '',
         session.working_dir ?? '',
-      ]
+        ...plainUserMessages,
+      ];
+      const haystack = haystackParts
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0)
         .join(' ')
         .toLowerCase();
       return haystack.includes(normalizedSearch);
@@ -1277,5 +1341,9 @@ export default function SessionsPage() {
     </div>
   );
 
-  return <MainLayout sidebar={sidebar} main={main} />;
+  return (
+    <TooltipProvider delayDuration={150}>
+      <MainLayout sidebar={sidebar} main={main} />
+    </TooltipProvider>
+  );
 }

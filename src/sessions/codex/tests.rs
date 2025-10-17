@@ -1,6 +1,6 @@
 use super::*;
 use expect_test::expect;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -99,7 +99,8 @@ fn tool_use_event_snapshot() {
 
 #[test]
 fn real_session_tool_events_snapshot() {
-    let events = load_fixture("rollout-2025-10-17T20-38-29-0199f22d-c547-7eb3-99cd-bfef8fb5430c.jsonl");
+    let events =
+        load_fixture("rollout-2025-10-17T20-38-29-0199f22d-c547-7eb3-99cd-bfef8fb5430c.jsonl");
     assert_snapshot(
         "tests/fixtures/snapshots/codex/real_session_tool_events.json",
         &snapshot_events(&events),
