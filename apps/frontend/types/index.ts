@@ -27,7 +27,8 @@ export interface BaseSessionSummary {
   session_id: string;
   last_user_message: string;
   last_timestamp?: string | null;
-  user_messages: string[];
+  user_message_count: number;
+  user_messages_preview: string[];
 }
 
 export type WorktreeSessionSummary = BaseSessionSummary;
@@ -58,6 +59,19 @@ export interface SessionEvent {
   data?: Record<string, unknown> | null;
   timestamp?: string;
   raw?: unknown;
+  tool?: SessionToolEvent | null;
+}
+
+export type SessionToolPhase = 'use' | 'result';
+
+export interface SessionToolEvent {
+  phase: SessionToolPhase;
+  name?: string | null;
+  identifier?: string | null;
+  input?: unknown;
+  output?: unknown;
+  working_dir?: string | null;
+  extras?: Record<string, unknown>;
 }
 
 export interface SessionDetailResponse {

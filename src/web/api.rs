@@ -1,9 +1,9 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use axum::{
-    Json,
     extract::{Path as AxumPath, Query},
     http::StatusCode,
     response::IntoResponse,
+    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -16,15 +16,15 @@ use std::time::Instant;
 
 use crate::{
     git::{
-        CommitsAhead, HeadCommitInfo, WorktreeGitStatus, collect_worktree_diff_breakdown,
-        commits_since_merge_base, head_commit_info, summarize_worktree_status,
+        collect_worktree_diff_breakdown, commits_since_merge_base, head_commit_info,
+        summarize_worktree_status, CommitsAhead, HeadCommitInfo, WorktreeGitStatus,
     },
     process_registry::{
-        MAX_PROCESSES_PER_WORKTREE, ProcessRecord, ProcessRegistry,
-        ProcessStatus as RegistryProcessStatus, canonicalize_cwd,
+        canonicalize_cwd, ProcessRecord, ProcessRegistry, ProcessStatus as RegistryProcessStatus,
+        MAX_PROCESSES_PER_WORKTREE,
     },
     sessions::{
-        SessionEvent, SessionRecord, canonicalize as canonicalize_session_path, default_providers,
+        canonicalize as canonicalize_session_path, default_providers, SessionEvent, SessionRecord,
     },
     state::{WorktreeInfo, XlaudeState},
 };
@@ -36,7 +36,8 @@ pub struct WorktreeSessionSummary {
     pub session_id: String,
     pub last_user_message: String,
     pub last_timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    pub user_messages: Vec<String>,
+    pub user_message_count: usize,
+    pub user_messages_preview: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -45,7 +46,8 @@ pub struct SessionSummaryPayload {
     pub session_id: String,
     pub last_user_message: String,
     pub last_timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    pub user_messages: Vec<String>,
+    pub user_message_count: usize,
+    pub user_messages_preview: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -274,6 +276,71 @@ impl From<RegistryProcessStatus> for WorktreeProcessStatus {
     }
 }
 
+const SESSION_PREVIEW_MAX_MESSAGES: usize = 12;
+const SESSION_PREVIEW_HEAD_MESSAGES: usize = 3;
+const SESSION_PREVIEW_MAX_CHARS: usize = 512;
+
+fn truncate_preview_message(message: &str, max_chars: usize) -> String {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let mut preview = String::new();
+    let mut chars = trimmed.chars();
+    for _ in 0..max_chars {
+        match chars.next() {
+            Some(ch) => preview.push(ch),
+            None => return preview,
+        }
+    }
+
+    if chars.next().is_some() {
+        preview.push('…');
+    }
+
+    preview
+}
+
+fn build_user_message_preview(messages: &[String]) -> (Vec<String>, usize) {
+    let total = messages.len();
+    if total == 0 {
+        return (Vec::new(), 0);
+    }
+
+    if total <= SESSION_PREVIEW_MAX_MESSAGES {
+        let preview = messages
+            .iter()
+            .map(|message| truncate_preview_message(message, SESSION_PREVIEW_MAX_CHARS))
+            .collect();
+        return (preview, total);
+    }
+
+    let head_count = SESSION_PREVIEW_HEAD_MESSAGES.min(total);
+    let mut preview: Vec<String> = messages
+        .iter()
+        .take(head_count)
+        .map(|message| truncate_preview_message(message, SESSION_PREVIEW_MAX_CHARS))
+        .collect();
+
+    let tail_capacity = SESSION_PREVIEW_MAX_MESSAGES.saturating_sub(preview.len());
+    if tail_capacity > 0 {
+        let mut tail_start = total.saturating_sub(tail_capacity);
+        if tail_start < head_count {
+            tail_start = head_count;
+        }
+
+        preview.extend(
+            messages
+                .iter()
+                .skip(tail_start)
+                .map(|message| truncate_preview_message(message, SESSION_PREVIEW_MAX_CHARS)),
+        );
+    }
+
+    (preview, total)
+}
+
 static WORKTREE_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn warn_once(operation: &str, path: &Path, render: impl FnOnce() -> String) {
@@ -375,6 +442,7 @@ fn user_messages_to_events(record: &SessionRecord) -> Vec<SessionEvent> {
             data: None,
             timestamp: None,
             raw: None,
+            tool: None,
         })
         .collect()
 }
@@ -528,12 +596,15 @@ fn match_sessions_for_worktree(
         };
 
         if working_dir.starts_with(base_path) {
+            let (user_messages_preview, user_message_count) =
+                build_user_message_preview(&session.record.user_messages);
             summaries.push(WorktreeSessionSummary {
                 provider: session.record.provider.clone(),
                 session_id: session.record.id.clone(),
                 last_user_message: session.record.last_user_message.clone().unwrap_or_default(),
                 last_timestamp: session.record.last_timestamp,
-                user_messages: session.record.user_messages.clone(),
+                user_message_count,
+                user_messages_preview,
             });
         }
     }
@@ -754,6 +825,9 @@ fn collect_all_sessions() -> Result<SessionListResponse> {
                         .map(|path| path.display().to_string())
                 });
 
+            let (user_messages_preview, user_message_count) =
+                build_user_message_preview(&normalized.record.user_messages);
+
             SessionSummaryPayload {
                 provider: normalized.record.provider.clone(),
                 session_id: normalized.record.id.clone(),
@@ -763,7 +837,8 @@ fn collect_all_sessions() -> Result<SessionListResponse> {
                     .clone()
                     .unwrap_or_default(),
                 last_timestamp: normalized.record.last_timestamp,
-                user_messages: normalized.record.user_messages.clone(),
+                user_message_count,
+                user_messages_preview,
                 worktree_id,
                 worktree_name,
                 repo_name,

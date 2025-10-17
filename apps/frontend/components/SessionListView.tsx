@@ -1,7 +1,7 @@
 "use client";
 
 import { ReactNode, useState } from "react";
-import type { SessionEvent } from "@/types";
+import type { SessionEvent, SessionToolEvent } from "@/types";
 import { ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/24/outline";
 import { cn } from "@/lib/utils";
 import { getProviderBadgeClasses } from "@/lib/providers";
@@ -86,6 +86,150 @@ function shouldCollapsePlainMessage(message: string) {
     return true;
   }
   return message.split(/\r?\n/).length > 8;
+}
+
+function hasRenderableContent(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+  return true;
+}
+
+function formatStructuredValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (error) {
+    return String(value);
+  }
+}
+
+function buildToolRender(
+  detail: SessionEvent,
+  tool: SessionToolEvent,
+  index: number,
+  formatTimestamp: (value?: string | null) => string,
+): SessionMessageRenderResult {
+  const phaseLabel = tool.phase === "use" ? "Tool Use" : "Tool Result";
+  const titlePrefix = `#${index + 1}`;
+  const titleParts = [phaseLabel];
+  if (tool.name && tool.name.trim().length > 0) {
+    titleParts.push(tool.name);
+  }
+  const baseTitle = titleParts.join(" · ");
+  const title = baseTitle ? `${titlePrefix} · ${baseTitle}` : titlePrefix;
+
+  const subtitleParts: string[] = [];
+  if (tool.identifier && tool.identifier.trim().length > 0) {
+    subtitleParts.push(`ID ${tool.identifier}`);
+  }
+  if (detail.timestamp) {
+    const formatted = formatTimestamp(detail.timestamp);
+    if (formatted !== "unknown") {
+      subtitleParts.push(formatted);
+    }
+  }
+  const subtitle = subtitleParts.join(" • ");
+
+  const metadataItems: Array<{ label: string; value: string }> = [];
+  if (tool.working_dir && tool.working_dir.trim().length > 0) {
+    metadataItems.push({ label: "Working dir", value: tool.working_dir });
+  }
+
+  const sections: Array<{ key: string; label: string; formatted: string }> = [];
+  if (hasRenderableContent(tool.input)) {
+    const formatted = formatStructuredValue(tool.input);
+    if (formatted) {
+      sections.push({ key: "input", label: "Input", formatted });
+    }
+  }
+  if (hasRenderableContent(tool.output)) {
+    const formatted = formatStructuredValue(tool.output);
+    if (formatted) {
+      sections.push({ key: "output", label: "Output", formatted });
+    }
+  }
+  if (hasRenderableContent(tool.extras)) {
+    const formatted = formatStructuredValue(tool.extras);
+    if (formatted) {
+      sections.push({ key: "extras", label: "Extras", formatted });
+    }
+  }
+
+  if (sections.length === 0) {
+    const text = detail.text?.trim();
+    if (text) {
+      sections.push({ key: "message", label: "Message", formatted: text });
+    }
+  }
+
+  const accent = getMessageAccent(detail);
+
+  const collapseCandidates = sections.map((section) => section.formatted);
+  const shouldCollapse = collapseCandidates.some((value) => shouldCollapsePlainMessage(value));
+  const accentDefault = accent.defaultCollapsed ?? false;
+  const collapsible = shouldCollapse || accentDefault;
+  const defaultCollapsed = accentDefault || shouldCollapse;
+
+  const content = (
+    <div className="space-y-3">
+      {metadataItems.length > 0 ? (
+        <dl className="grid grid-cols-1 gap-2 text-xs text-gray-600 sm:grid-cols-2">
+          {metadataItems.map((item) => (
+            <div
+              key={`${item.label}:${item.value}`}
+              className="rounded border border-gray-200 bg-white/80 px-3 py-2"
+            >
+              <dt className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                {item.label}
+              </dt>
+              <dd className="mt-1 break-all font-mono text-xs text-gray-800">{item.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {sections.map((section) => (
+        <div
+          key={section.key}
+          className="rounded border border-gray-200 bg-white/80 px-3 py-2"
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+            {section.label}
+          </p>
+          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-all text-xs text-gray-800">
+            {section.formatted}
+          </pre>
+        </div>
+      ))}
+      {sections.length === 0 ? (
+        <p className="text-xs italic text-gray-500">No structured tool payload available.</p>
+      ) : null}
+    </div>
+  );
+
+  return {
+    title,
+    subtitle,
+    content,
+    collapsible,
+    defaultCollapsed,
+    containerClassName: accent.container,
+    titleClassName: accent.title,
+  };
 }
 
 function toStartCase(value: string) {
@@ -328,6 +472,9 @@ function buildDefaultRender(
   formatTimestamp: (value?: string | null) => string,
 ): SessionMessageRenderResult {
   const detail = message.detail;
+  if (detail.tool) {
+    return buildToolRender(detail, detail.tool, index, formatTimestamp);
+  }
   const baseText =
     detail.text ??
     detail.summary_text ??

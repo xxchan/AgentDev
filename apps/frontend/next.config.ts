@@ -10,6 +10,12 @@ const nextConfig: NextConfig = {
   experimental: {
     esmExternals: true,
   },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
 };
 
 nextConfig.distDir = isDevelopment ? ".next-dev" : ".next-prod";

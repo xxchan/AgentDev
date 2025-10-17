@@ -13,7 +13,8 @@ export default function WorktreeSessions({
   formatTimestamp,
 }: WorktreeSessionsProps) {
   const sessionItems: SessionListItem[] = sessions.map((session) => {
-    const messages: SessionListMessage[] = session.user_messages.map((text, index) => ({
+    const previewMessages = session.user_messages_preview;
+    const messages: SessionListMessage[] = previewMessages.map((text, index) => ({
       key: `${session.provider}-${session.session_id}-${index}`,
       detail: {
         actor: "user",
@@ -24,6 +25,21 @@ export default function WorktreeSessions({
         data: null,
       },
     }));
+
+    const remainingCount = session.user_message_count - previewMessages.length;
+    if (remainingCount > 0) {
+      messages.push({
+        key: `${session.provider}-${session.session_id}-remaining`,
+        detail: {
+          actor: "system",
+          category: "session_meta",
+          label: "Summary",
+          text: `…and ${remainingCount} more user message${remainingCount === 1 ? "" : "s"}`,
+          summary_text: `…and ${remainingCount} more user message${remainingCount === 1 ? "" : "s"}`,
+          data: null,
+        },
+      });
+    }
 
     return {
       sessionKey: `${session.provider}-${session.session_id}`,

@@ -311,6 +311,14 @@ const SPECIAL_MESSAGE_TAGS = new Set([
   'user_action',
 ]);
 
+function getPreviewMessages(session: SessionSummary): string[] {
+  return session.user_messages_preview;
+}
+
+function isPreviewTruncated(session: SessionSummary): boolean {
+  return session.user_message_count > session.user_messages_preview.length;
+}
+
 function isSpecialTaggedUserMessage(message: string): boolean {
   const trimmed = message.trim();
   if (!trimmed) {
@@ -325,7 +333,7 @@ function isSpecialTaggedUserMessage(message: string): boolean {
 }
 
 function collectPlainUserMessages(session: SessionSummary): string[] {
-  return session.user_messages
+  return getPreviewMessages(session)
     .map((message) => message.trim())
     .filter((message) => message.length > 0 && !isSpecialTaggedUserMessage(message));
 }
@@ -334,8 +342,9 @@ function buildSessionPreview(session: SessionSummary): string {
   if (session.last_user_message && session.last_user_message.trim().length > 0) {
     return session.last_user_message.trim();
   }
-  for (let index = session.user_messages.length - 1; index >= 0; index -= 1) {
-    const candidate = session.user_messages[index];
+  const previewMessages = getPreviewMessages(session);
+  for (let index = previewMessages.length - 1; index >= 0; index -= 1) {
+    const candidate = previewMessages[index];
     if (candidate && candidate.trim().length > 0) {
       return candidate.trim();
     }
@@ -354,17 +363,31 @@ function toSessionListMessages(
   }));
 }
 
-function buildUserOnlyMessages(session: SessionSummary): SessionListMessage[] {
+function buildUserOnlyMessages(
+  session: SessionSummary,
+  detail?: SessionDetailResponse | null,
+): SessionListMessage[] {
   const sessionKey = getSessionKey(session);
-  const events = session.user_messages.map<SessionEvent>((text) => ({
-    actor: 'user',
-    category: 'user',
-    label: 'User',
-    text,
-    summary_text: text,
-    data: null,
-  }));
+  const previewMessages = getPreviewMessages(session);
+  const baseEvents =
+    detail?.events ??
+    previewMessages.map<SessionEvent>((text) => ({
+      actor: 'user',
+      category: 'user',
+      label: 'User',
+      text,
+      summary_text: text,
+      data: null,
+    }));
+  const events =
+    detail && detail.mode === 'user_only'
+      ? baseEvents
+      : baseEvents.filter((event) => (event.actor ?? '').toLowerCase() === 'user');
   return toSessionListMessages(events, sessionKey, 'user');
+}
+
+function buildDetailCacheKey(sessionKey: string, mode: SessionDetailMode): string {
+  return `${sessionKey}|${mode}`;
 }
 
 interface ProviderOption {
@@ -640,73 +663,147 @@ function SessionSummaryList({
               const showFirstUserPreview =
                 Boolean(firstUserPreview && firstUserPreview !== preview);
               const metadata = buildMetadataParts(session);
-              const messageCount = session.user_messages.length;
+              const messageCount = session.user_message_count;
               const plainUserMessageCount = plainUserMessages.length;
               const previewLabel =
                 plainUserMessageCount <= 1 ? 'Only user message' : 'Last user';
               return (
-                <li key={sessionKey}>
-                  <button
-                    type="button"
-                    onClick={() => onSelect(sessionKey)}
-                    className={cn(
-                      'flex w-full flex-col gap-2 border-l-2 border-transparent px-4 py-3 text-left transition-colors',
-                      isSelected
-                        ? 'border-primary/70 bg-primary/10 text-foreground'
-                        : 'hover:bg-muted',
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={cn(
-                            'rounded-full px-2 py-0.5 text-xs font-medium uppercase tracking-wide',
-                            getProviderBadgeClasses(session.provider),
-                          )}
-                        >
-                          {session.provider}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {format(session.last_timestamp)}
-                        </span>
-                        <span className="text-[0.65rem] text-muted-foreground">
-                          {messageCount} msg{messageCount === 1 ? '' : 's'}
-                        </span>
-                      </div>
-                      <span className="font-mono text-xs text-muted-foreground" title={session.session_id}>
-                        {session.session_id}
-                      </span>
-                    </div>
-                    <div className="space-y-1 text-sm text-foreground/90 pr-scroll-gutter-lg">
-                      {showFirstUserPreview ? (
-                        <div className="whitespace-pre-wrap break-all">
-                          <span className="font-semibold text-muted-foreground">
-                            First user:{' '}
-                          </span>
-                          {firstUserPreview}
-                        </div>
-                      ) : null}
-                      <div className="whitespace-pre-wrap break-all">
-                        <span className="font-semibold text-muted-foreground">
-                          {previewLabel}:{' '}
-                        </span>
-                        {preview}
-                      </div>
-                    </div>
-                    {metadata.length > 0 ? (
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[0.7rem] text-muted-foreground">
-                        {metadata.map((line) => (
-                          <span key={line}>{line}</span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </button>
-                </li>
+                <SessionSummaryItem
+                  key={sessionKey}
+                  session={session}
+                  sessionKey={sessionKey}
+                  isSelected={isSelected}
+                  preview={preview}
+                  previewLabel={previewLabel}
+                  firstUserPreview={firstUserPreview}
+                  showFirstUserPreview={showFirstUserPreview}
+                  metadata={metadata}
+                  messageCount={messageCount}
+                  onSelect={onSelect}
+                  formatTimestamp={format}
+                />
               );
             })}
           </ul>
         )}
       </ScrollArea>
+    </div>
+  );
+}
+
+interface SessionSummaryItemProps {
+  session: SessionSummary;
+  sessionKey: string;
+  isSelected: boolean;
+  preview: string;
+  previewLabel: string;
+  firstUserPreview: string | null;
+  showFirstUserPreview: boolean;
+  metadata: string[];
+  messageCount: number;
+  onSelect: (sessionKey: string) => void;
+  formatTimestamp: (value?: string | null) => string;
+}
+
+function SessionSummaryItem({
+  session,
+  sessionKey,
+  isSelected,
+  preview,
+  previewLabel,
+  firstUserPreview,
+  showFirstUserPreview,
+  metadata,
+  messageCount,
+  onSelect,
+  formatTimestamp,
+}: SessionSummaryItemProps) {
+  const handleSelect = () => {
+    onSelect(sessionKey);
+  };
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={handleSelect}
+        className={cn(
+          'flex min-w-0 w-full flex-col gap-3 border-l-2 border-transparent px-4 py-3 text-left transition-colors',
+          isSelected
+            ? 'border-primary/70 bg-primary/10 text-foreground'
+            : 'hover:bg-muted',
+        )}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex flex-wrap items-center gap-2">
+            <span
+              className={cn(
+                'rounded-full px-2 py-0.5 text-xs font-medium uppercase tracking-wide',
+                getProviderBadgeClasses(session.provider),
+              )}
+            >
+              {session.provider}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {formatTimestamp(session.last_timestamp)}
+            </span>
+            <span className="text-[0.65rem] text-muted-foreground">
+              {messageCount} msg{messageCount === 1 ? '' : 's'}
+            </span>
+          </div>
+          <span
+            className="min-w-0 break-all text-right font-mono text-xs text-muted-foreground"
+            title={session.session_id}
+          >
+            {session.session_id}
+          </span>
+        </div>
+        <div className="flex min-w-0 flex-col gap-2 pr-scroll-gutter-lg">
+          {showFirstUserPreview && firstUserPreview ? (
+            <MessagePreview label="First user" content={firstUserPreview} />
+          ) : null}
+          <MessagePreview
+            label={previewLabel}
+            content={preview}
+            variant={showFirstUserPreview ? 'primary' : 'default'}
+          />
+        </div>
+        {metadata.length > 0 ? (
+          <div className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-[0.7rem] text-muted-foreground">
+            {metadata.map((line) => (
+              <span key={line} className="break-all">
+                {line}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </button>
+    </li>
+  );
+}
+
+interface MessagePreviewProps {
+  label: string;
+  content: string;
+  variant?: 'default' | 'primary';
+}
+
+function MessagePreview({ label, content, variant = 'default' }: MessagePreviewProps) {
+  return (
+    <div
+      className={cn(
+        'min-w-0 rounded-md border px-3 py-2',
+        variant === 'primary'
+          ? 'border-primary/40 bg-primary/10'
+          : 'border-border/60 bg-muted/30',
+      )}
+    >
+      <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
+      <div className="mt-1 whitespace-pre-wrap break-all text-sm leading-relaxed text-foreground/90">
+        {content}
+      </div>
     </div>
   );
 }
@@ -899,24 +996,72 @@ export default function SessionsPage() {
     [selectedSessionKey, sessionByKey],
   );
 
-  const cacheKey = selectedSession ? getSessionKey(selectedSession) : null;
-  const detailResponse = cacheKey ? detailCache[cacheKey] : undefined;
-  const detailError = cacheKey ? detailErrors[cacheKey] : undefined;
-  const detailLoading = cacheKey !== null && detailLoadingKey === cacheKey;
+  const baseSessionKey = selectedSession ? getSessionKey(selectedSession) : null;
+  const previewTruncated =
+    selectedSession !== null ? isPreviewTruncated(selectedSession) : false;
+
+  const fullDetailKey =
+    baseSessionKey !== null ? buildDetailCacheKey(baseSessionKey, 'full') : null;
+  const userOnlyDetailKey =
+    baseSessionKey !== null ? buildDetailCacheKey(baseSessionKey, 'user_only') : null;
+
+  const fullDetail = fullDetailKey ? detailCache[fullDetailKey] : undefined;
+  const userOnlyDetail = userOnlyDetailKey ? detailCache[userOnlyDetailKey] : undefined;
+
+  const detailResponse =
+    detailMode === 'full' ? fullDetail : userOnlyDetail ?? fullDetail;
+
+  const detailError =
+    detailMode === 'full'
+      ? (fullDetailKey ? detailErrors[fullDetailKey] : undefined)
+      : (() => {
+          if (userOnlyDetailKey && detailErrors[userOnlyDetailKey]) {
+            return detailErrors[userOnlyDetailKey];
+          }
+          return fullDetailKey ? detailErrors[fullDetailKey] : undefined;
+        })();
+
+  const desiredFetch =
+    selectedSession && baseSessionKey
+      ? (() => {
+          if (detailMode === 'full') {
+            return {
+              key: buildDetailCacheKey(baseSessionKey, 'full'),
+              mode: 'full' as SessionDetailMode,
+            };
+          }
+          if (detailMode === 'user_only' && previewTruncated && !fullDetail) {
+            return {
+              key: buildDetailCacheKey(baseSessionKey, 'user_only'),
+              mode: 'user_only' as SessionDetailMode,
+            };
+          }
+          return null;
+        })()
+      : null;
+
+  const detailLoading = desiredFetch ? detailLoadingKey === desiredFetch.key : false;
+  const desiredFetchKey = desiredFetch?.key ?? null;
+  const desiredFetchMode = desiredFetch?.mode ?? null;
 
   useEffect(() => {
-    if (detailMode !== 'full' || !selectedSession || !cacheKey || detailResponse) {
+    if (!selectedSession || !desiredFetchKey || !desiredFetchMode) {
+      setDetailLoadingKey(null);
+      return;
+    }
+
+    if (detailCache[desiredFetchKey]) {
       return;
     }
 
     const controller = new AbortController();
-    setDetailLoadingKey(cacheKey);
+    setDetailLoadingKey(desiredFetchKey);
     setDetailErrors((prev) => {
-      if (!(cacheKey in prev)) {
+      if (!(desiredFetchKey in prev)) {
         return prev;
       }
       const next = { ...prev };
-      delete next[cacheKey];
+      delete next[desiredFetchKey];
       return next;
     });
 
@@ -924,7 +1069,7 @@ export default function SessionsPage() {
       try {
         const response = await fetch(
           apiUrl(
-            `/api/sessions/${encodeURIComponent(selectedSession.provider)}/${encodeURIComponent(selectedSession.session_id)}?mode=full`,
+            `/api/sessions/${encodeURIComponent(selectedSession.provider)}/${encodeURIComponent(selectedSession.session_id)}?mode=${desiredFetchMode}`,
           ),
           { signal: controller.signal },
         );
@@ -935,15 +1080,19 @@ export default function SessionsPage() {
         if (controller.signal.aborted) {
           return;
         }
-        setDetailCache((prev) => ({ ...prev, [cacheKey]: detail }));
-        setDetailLoadingKey((current) => (current === cacheKey ? null : current));
+        setDetailCache((prev) => ({ ...prev, [desiredFetchKey]: detail }));
+        setDetailLoadingKey((current) =>
+          current === desiredFetchKey ? null : current,
+        );
       } catch (error) {
         if (controller.signal.aborted) {
           return;
         }
         const message = error instanceof Error ? error.message : 'Unknown error';
-        setDetailErrors((prev) => ({ ...prev, [cacheKey]: message }));
-        setDetailLoadingKey((current) => (current === cacheKey ? null : current));
+        setDetailErrors((prev) => ({ ...prev, [desiredFetchKey]: message }));
+        setDetailLoadingKey((current) =>
+          current === desiredFetchKey ? null : current,
+        );
         console.error('Failed to load session detail', error);
       }
     };
@@ -953,13 +1102,13 @@ export default function SessionsPage() {
     return () => {
       controller.abort();
     };
-  }, [detailMode, selectedSession, cacheKey, detailResponse]);
-
-  useEffect(() => {
-    if (detailMode !== 'full') {
-      setDetailLoadingKey(null);
-    }
-  }, [detailMode]);
+  }, [
+    detailMode,
+    selectedSession,
+    desiredFetchKey,
+    desiredFetchMode,
+    detailCache,
+  ]);
 
   const detailItems = useMemo<SessionListItem[]>(() => {
     if (!selectedSession) {
@@ -968,10 +1117,65 @@ export default function SessionsPage() {
 
     const metadataParts = buildMetadataParts(selectedSession);
     const sessionKey = getSessionKey(selectedSession);
-    const messageItems: SessionListMessage[] =
+    let messageItems: SessionListMessage[] =
       detailMode === 'full'
         ? toSessionListMessages(detailResponse?.events ?? [], sessionKey, 'full')
-        : buildUserOnlyMessages(selectedSession);
+        : buildUserOnlyMessages(selectedSession, detailResponse);
+
+    if (detailMode === 'user_only') {
+      const shownUserMessages = messageItems.filter(
+        (item) => (item.detail.actor ?? '').toLowerCase() === 'user',
+      ).length;
+
+      if (previewTruncated && shownUserMessages < selectedSession.user_message_count) {
+        messageItems = [
+          ...messageItems,
+          {
+            key: `${sessionKey}-preview-note`,
+            detail: {
+              actor: 'system',
+              category: 'session_meta',
+              label: 'Preview',
+              text: `Showing ${shownUserMessages} of ${selectedSession.user_message_count} user messages.`,
+              summary_text: 'Showing limited user messages',
+              data: null,
+            },
+          },
+        ];
+      }
+
+      if (detailLoading) {
+        messageItems = [
+          ...messageItems,
+          {
+            key: `${sessionKey}-loading`,
+            detail: {
+              actor: 'system',
+              category: 'session_meta',
+              label: 'Loading',
+              text: 'Loading full user transcript…',
+              summary_text: 'Loading full transcript…',
+              data: null,
+            },
+          },
+        ];
+      } else if (detailError) {
+        messageItems = [
+          ...messageItems,
+          {
+            key: `${sessionKey}-error`,
+            detail: {
+              actor: 'system',
+              category: 'session_meta',
+              label: 'Error',
+              text: `Failed to load transcript: ${detailError}`,
+              summary_text: `Failed to load transcript: ${detailError}`,
+              data: null,
+            },
+          },
+        ];
+      }
+    }
 
     const item: SessionListItem = {
       sessionKey: getSessionKey(selectedSession),
@@ -1018,12 +1222,19 @@ export default function SessionsPage() {
       } else if (messageItems.length === 0) {
         item.emptyState = 'No transcript entries found.';
       }
-    } else if (messageItems.length === 0) {
+    } else if (messageItems.filter((entry) => (entry.detail.actor ?? '').toLowerCase() === 'user').length === 0) {
       item.emptyState = 'No user messages recorded.';
     }
 
     return [item];
-  }, [selectedSession, detailMode, detailResponse, detailLoading, detailError]);
+  }, [
+    selectedSession,
+    detailMode,
+    detailResponse,
+    detailLoading,
+    detailError,
+    previewTruncated,
+  ]);
 
   const selectedGroup = groupsById.get(selectedGroupId);
 

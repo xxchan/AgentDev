@@ -8,9 +8,11 @@ use std::time::SystemTime;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use super::{SessionEvent, SessionProvider, SessionRecord, canonicalize};
+use super::{
+    SessionEvent, SessionProvider, SessionRecord, SessionToolEvent, SessionToolPhase, canonicalize,
+};
 
 pub struct ClaudeCliSessionProvider {
     sessions_dir: Option<PathBuf>,
@@ -173,6 +175,8 @@ impl ClaudeParsedEntry {
             None
         };
 
+        let working_dir_hint = self.cwd().map(|value| value.to_string());
+
         let mut data_map = serde_json::Map::new();
         if let Some(cwd) = self.working_dir_value() {
             data_map.insert("working_dir".to_string(), cwd);
@@ -186,10 +190,28 @@ impl ClaudeParsedEntry {
             Some(Value::Object(data_map))
         };
 
-        let label = actor
+        let mut tool = extract_claude_tool_event(&self.raw, working_dir_hint.as_deref());
+        if let Some(tool_event) = tool.as_mut() {
+            if tool_event.working_dir.is_none() {
+                if let Some(dir) = working_dir_hint.as_ref() {
+                    tool_event.working_dir = Some(dir.clone());
+                }
+            }
+        }
+
+        let mut category_value = category;
+        let mut label = actor
             .as_ref()
             .map(|value| to_title_case(value))
-            .or_else(|| Some(to_title_case(&category)));
+            .or_else(|| Some(to_title_case(&category_value)));
+
+        if let Some(tool_event) = tool.as_ref() {
+            category_value = match tool_event.phase {
+                SessionToolPhase::Use => "tool_use".to_string(),
+                SessionToolPhase::Result => "tool_result".to_string(),
+            };
+            label = Some(tool_label(tool_event));
+        }
 
         let raw = if include_raw {
             Some(self.raw.clone())
@@ -199,13 +221,14 @@ impl ClaudeParsedEntry {
 
         Some(SessionEvent {
             actor,
-            category,
+            category: category_value,
             label,
             text: Some(trimmed.to_string()),
             summary_text,
             data,
             timestamp: self.timestamp(),
             raw,
+            tool,
         })
     }
 }
@@ -544,6 +567,105 @@ fn format_message_content(value: &Value) -> Option<String> {
     }
 }
 
+fn extract_claude_tool_event(raw: &Value, working_dir: Option<&str>) -> Option<SessionToolEvent> {
+    let message = raw.get("message")?.as_object()?;
+    let content = message.get("content")?;
+    let items = content.as_array()?;
+
+    let mut candidate: Option<(&Map<String, Value>, SessionToolPhase)> = None;
+    for item in items {
+        let obj = item.as_object()?;
+        let item_type = obj.get("type").and_then(|value| value.as_str())?;
+        match item_type {
+            "tool_use" => {
+                candidate = Some((obj, SessionToolPhase::Use));
+                break;
+            }
+            "tool_result" => {
+                if candidate.is_none() {
+                    candidate = Some((obj, SessionToolPhase::Result));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let (obj, phase) = candidate?;
+
+    let mut extras = Map::new();
+    for (key, value) in obj.iter() {
+        if matches!(
+            key.as_str(),
+            "type"
+                | "id"
+                | "tool_use_id"
+                | "name"
+                | "input"
+                | "output"
+                | "result"
+                | "content"
+                | "text"
+        ) {
+            continue;
+        }
+        extras.insert(key.clone(), value.clone());
+    }
+
+    let mut working_dir_value = working_dir.map(|value| value.to_string());
+    if working_dir_value.is_none() {
+        if let Some(dir) = obj
+            .get("working_dir")
+            .or_else(|| obj.get("cwd"))
+            .and_then(|value| value.as_str())
+        {
+            working_dir_value = Some(dir.to_string());
+        }
+    }
+
+    let input = obj.get("input").cloned();
+    let output = match phase {
+        SessionToolPhase::Use => None,
+        SessionToolPhase::Result => obj
+            .get("output")
+            .or_else(|| obj.get("result"))
+            .or_else(|| obj.get("content"))
+            .or_else(|| obj.get("text"))
+            .cloned(),
+    };
+
+    let identifier = obj
+        .get("id")
+        .or_else(|| obj.get("tool_use_id"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+
+    Some(SessionToolEvent {
+        phase,
+        name: obj
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        identifier,
+        input,
+        output,
+        working_dir: working_dir_value,
+        extras,
+    })
+}
+
+fn tool_label(tool: &SessionToolEvent) -> String {
+    let phase = match tool.phase {
+        SessionToolPhase::Use => "Tool Use",
+        SessionToolPhase::Result => "Tool Result",
+    };
+
+    if let Some(name) = tool.name.as_ref().filter(|value| !value.is_empty()) {
+        format!("{phase} · {name}")
+    } else {
+        phase.to_string()
+    }
+}
+
 fn normalize_user_message(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty()
@@ -560,60 +682,6 @@ fn normalize_user_message(text: &str) -> Option<String> {
 
 fn pretty_json(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use expect_test::expect;
-    use serde_json::json;
-
-    fn snapshot(event: &SessionEvent) -> String {
-        serde_json::to_string_pretty(event).expect("serialize event")
-    }
-
-    #[test]
-    fn tool_use_event_snapshot() {
-        let raw = json!({
-            "timestamp": "2025-01-02T03:04:05Z",
-            "id": "event-1",
-            "cwd": "/tmp/repo",
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "name": "git_diff",
-                        "input": {
-                            "paths": ["src/lib.rs"],
-                            "commit": "HEAD~1"
-                        }
-                    },
-                    {
-                        "type": "text",
-                        "text": "diff output truncated"
-                    }
-                ]
-            }
-        });
-
-        let entry = ClaudeParsedEntry::parse(raw).expect("parse claude entry");
-        let event = entry.to_event(false).expect("convert claude tool event");
-
-        expect![[r#"
-            {
-              "actor": "assistant",
-              "category": "assistant",
-              "label": "Assistant",
-              "text": "Tool call: git_diff\n{\n  \"commit\": \"HEAD~1\",\n  \"paths\": [\n    \"src/lib.rs\"\n  ]\n}\n\ndiff output truncated",
-              "data": {
-                "id": "event-1",
-                "working_dir": "/tmp/repo"
-              },
-              "timestamp": "2025-01-02T03:04:05Z"
-            }"#]]
-        .assert_eq(&snapshot(&event));
-    }
 }
 
 fn to_title_case(value: &str) -> String {
@@ -637,3 +705,6 @@ fn to_title_case(value: &str) -> String {
         parts.join(" ")
     }
 }
+
+#[cfg(test)]
+mod tests;

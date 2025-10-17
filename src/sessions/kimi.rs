@@ -8,9 +8,9 @@ use std::time::SystemTime;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use super::{SessionEvent, SessionProvider, SessionRecord};
+use super::{SessionEvent, SessionProvider, SessionRecord, SessionToolEvent, SessionToolPhase};
 
 pub struct KimiSessionProvider {
     sessions_dir: Option<PathBuf>,
@@ -42,31 +42,33 @@ static KIMI_SESSION_CACHE: OnceLock<Mutex<SessionCache>> = OnceLock::new();
 /// TODO(provider-models): convert this raw struct into an enum-based event model to enforce variant coverage.
 #[derive(Debug, Deserialize, Serialize)]
 struct KimiRawEntry {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     role: Option<String>,
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     entry_type: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     content: Option<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     message: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     function_call: Option<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     arguments: Option<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     token_count: Option<u64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     input_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     output_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<i64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     timestamp: Option<String>,
     #[serde(flatten)]
     extra: HashMap<String, Value>,
@@ -142,10 +144,21 @@ impl KimiParsedEntry {
             return None;
         }
 
-        let label = actor
+        let tool = extract_kimi_tool_event(&self.raw);
+
+        let mut category_value = category.clone();
+        let mut label = actor
             .as_ref()
             .map(|value| to_title_case(value))
-            .or_else(|| Some(to_title_case(&category)));
+            .or_else(|| Some(to_title_case(&category_value)));
+
+        if let Some(tool_event) = tool.as_ref() {
+            category_value = match tool_event.phase {
+                SessionToolPhase::Use => "tool_use".to_string(),
+                SessionToolPhase::Result => "tool_result".to_string(),
+            };
+            label = Some(tool_label(tool_event));
+        }
 
         let summary_text = match entry_category {
             KimiEntryCategory::Message => {
@@ -167,13 +180,14 @@ impl KimiParsedEntry {
 
         Some(SessionEvent {
             actor,
-            category,
+            category: category_value,
             label,
             text: Some(trimmed.to_string()),
             summary_text,
             data: serde_json::to_value(&self.data).ok(),
             timestamp,
             raw,
+            tool,
         })
     }
 }
@@ -266,7 +280,16 @@ impl KimiSessionProvider {
             let (_, _, entry_category) = entry.category_with_actor();
             entry.apply_summary(&mut record, &entry_category);
 
-            if let Some(event) = entry.to_event(false) {
+            if let Some(mut event) = entry.to_event(false) {
+                if let Some(tool) = event.tool.as_mut() {
+                    if tool.working_dir.is_none() {
+                        if let Some(dir) =
+                            record.working_dir.as_ref().and_then(|path| path.to_str())
+                        {
+                            tool.working_dir = Some(dir.to_string());
+                        }
+                    }
+                }
                 record.ingest_event(&event);
             }
         }
@@ -430,7 +453,16 @@ impl SessionProvider for KimiSessionProvider {
                 continue;
             };
 
-            if let Some(event) = entry.to_event(true) {
+            if let Some(mut event) = entry.to_event(true) {
+                if let Some(tool) = event.tool.as_mut() {
+                    if tool.working_dir.is_none() {
+                        if let Some(dir) =
+                            record.working_dir.as_ref().and_then(|path| path.to_str())
+                        {
+                            tool.working_dir = Some(dir.to_string());
+                        }
+                    }
+                }
                 events.push(event);
             }
         }
@@ -574,6 +606,165 @@ fn kimi_format_content(content: &Value) -> Option<String> {
     }
 }
 
+fn extract_kimi_tool_event(raw: &Value) -> Option<SessionToolEvent> {
+    if raw
+        .get("role")
+        .and_then(|value| value.as_str())
+        .is_some_and(|role| role.eq_ignore_ascii_case("tool"))
+    {
+        let identifier = raw
+            .get("tool_call_id")
+            .or_else(|| raw.get("id"))
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string());
+
+        let mut extras = Map::new();
+        if let Some(status) = raw.get("status") {
+            extras.insert("status".to_string(), status.clone());
+        }
+        if let Some(error) = raw.get("error") {
+            extras.insert("error".to_string(), error.clone());
+        }
+
+        let output = raw
+            .get("content")
+            .cloned()
+            .or_else(|| raw.get("message").cloned())
+            .or_else(|| raw.get("text").cloned());
+
+        if let Some(content) = raw.get("content") {
+            extras.insert("content".to_string(), content.clone());
+        }
+
+        return Some(SessionToolEvent {
+            phase: SessionToolPhase::Result,
+            name: raw
+                .get("name")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string()),
+            identifier,
+            input: None,
+            output,
+            working_dir: None,
+            extras,
+        });
+    }
+
+    if let Some(tool_calls) = raw.get("tool_calls").and_then(|value| value.as_array()) {
+        if let Some(first) = tool_calls.first().and_then(|value| value.as_object()) {
+            let mut extras = Map::new();
+            extras.insert("tool_calls".to_string(), Value::Array(tool_calls.clone()));
+
+            let function = first.get("function").and_then(|value| value.as_object());
+            let name = function
+                .and_then(|map| map.get("name"))
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+            let identifier = first
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+
+            let input = function
+                .and_then(|map| map.get("arguments"))
+                .and_then(parse_kimi_arguments);
+
+            return Some(SessionToolEvent {
+                phase: SessionToolPhase::Use,
+                name,
+                identifier,
+                input,
+                output: None,
+                working_dir: None,
+                extras,
+            });
+        }
+    }
+
+    if let Some(function_call) = raw.get("function_call").and_then(|value| value.as_object()) {
+        let mut extras = Map::new();
+        extras.insert(
+            "function_call".to_string(),
+            Value::Object(function_call.clone()),
+        );
+        let name = function_call
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string());
+        let identifier = function_call
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string());
+        let input = function_call
+            .get("arguments")
+            .and_then(parse_kimi_arguments);
+
+        return Some(SessionToolEvent {
+            phase: SessionToolPhase::Use,
+            name,
+            identifier,
+            input,
+            output: None,
+            working_dir: None,
+            extras,
+        });
+    }
+
+    if raw.get("arguments").is_some() && raw.get("name").is_some() {
+        let mut extras = Map::new();
+        extras.insert("raw_tool".to_string(), raw.clone());
+        let name = raw
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string());
+        let input = raw.get("arguments").and_then(parse_kimi_arguments);
+
+        return Some(SessionToolEvent {
+            phase: SessionToolPhase::Use,
+            name,
+            identifier: raw
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string()),
+            input,
+            output: None,
+            working_dir: None,
+            extras,
+        });
+    }
+
+    None
+}
+
+fn parse_kimi_arguments(value: &Value) -> Option<Value> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                Some(Value::String(text.clone()))
+            } else {
+                serde_json::from_str::<Value>(trimmed)
+                    .ok()
+                    .or_else(|| Some(Value::String(text.clone())))
+            }
+        }
+        other => Some(other.clone()),
+    }
+}
+
+fn tool_label(tool: &SessionToolEvent) -> String {
+    let phase = match tool.phase {
+        SessionToolPhase::Use => "Tool Use",
+        SessionToolPhase::Result => "Tool Result",
+    };
+
+    if let Some(name) = tool.name.as_ref().filter(|value| !value.is_empty()) {
+        format!("{phase} · {name}")
+    } else {
+        phase.to_string()
+    }
+}
+
 fn to_title_case(value: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     for segment in value.split(|c: char| c == '_' || c == '-' || c == ' ') {
@@ -601,67 +792,4 @@ fn kimi_pretty_json(value: &Value) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use expect_test::expect;
-    use serde_json::json;
-
-    fn snapshot(event: &SessionEvent) -> String {
-        serde_json::to_string_pretty(event).expect("serialize event")
-    }
-
-    #[test]
-    fn tool_use_event_snapshot() {
-        let raw = json!({
-            "timestamp": "2025-01-02T03:04:05Z",
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": "call-1",
-                    "type": "function",
-                    "function": {
-                        "name": "git_diff",
-                        "arguments": "{\"paths\": [\"src/lib.rs\"], \"commit\": \"HEAD\"}"
-                    }
-                }
-            ]
-        });
-
-        let entry = KimiParsedEntry::parse(raw).expect("parse kimi entry");
-        let event = entry.to_event(false).expect("convert kimi tool event");
-
-        expect![[r#"
-            {
-              "actor": "assistant",
-              "category": "assistant",
-              "label": "Assistant",
-              "text": "Tool calls:\n[\n  {\n    \"function\": {\n      \"arguments\": \"{\\\"paths\\\": [\\\"src/lib.rs\\\"], \\\"commit\\\": \\\"HEAD\\\"}\",\n      \"name\": \"git_diff\"\n    },\n    \"id\": \"call-1\",\n    \"type\": \"function\"\n  }\n]",
-              "data": {
-                "arguments": null,
-                "content": null,
-                "function_call": null,
-                "id": null,
-                "input_tokens": null,
-                "message": null,
-                "name": null,
-                "output_tokens": null,
-                "role": "assistant",
-                "timestamp": "2025-01-02T03:04:05Z",
-                "token_count": null,
-                "tool_calls": [
-                  {
-                    "function": {
-                      "arguments": "{\"paths\": [\"src/lib.rs\"], \"commit\": \"HEAD\"}",
-                      "name": "git_diff"
-                    },
-                    "id": "call-1",
-                    "type": "function"
-                  }
-                ],
-                "type": null
-              },
-              "timestamp": "2025-01-02T03:04:05Z"
-            }"#]]
-        .assert_eq(&snapshot(&event));
-    }
-}
+mod tests;

@@ -1,0 +1,149 @@
+[
+  {
+    "actor": "file-history-snapshot",
+    "category": "file-history-snapshot",
+    "label": "File History Snapshot",
+    "text": "{\n  \"isSnapshotUpdate\": false,\n  \"messageId\": \"25991056-23f6-4d86-aa4a-7cd3ec999bcf\",\n  \"snapshot\": {\n    \"messageId\": \"25991056-23f6-4d86-aa4a-7cd3ec999bcf\",\n    \"timestamp\": \"2025-10-15T14:59:41.810Z\",\n    \"trackedFileBackups\": {}\n  },\n  \"type\": \"file-history-snapshot\"\n}"
+  },
+  {
+    "actor": "user",
+    "category": "user",
+    "label": "User",
+    "text": "同时调用两个tool，计算 1+1 和 2+2",
+    "summary_text": "同时调用两个tool，计算 1+1 和 2+2",
+    "data": {
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    },
+    "timestamp": "2025-10-15T14:59:41.807Z"
+  },
+  {
+    "actor": "assistant",
+    "category": "assistant",
+    "label": "Assistant",
+    "text": "我需要使用 Bash 工具来计算这两个表达式。让我并行执行这两个计算：",
+    "data": {
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    },
+    "timestamp": "2025-10-15T14:59:46.518Z"
+  },
+  {
+    "actor": "assistant",
+    "category": "tool_use",
+    "label": "Tool Use · Bash",
+    "text": "Tool call: Bash\n{\n  \"command\": \"echo $((1+1))\",\n  \"description\": \"Calculate 1+1\"\n}",
+    "data": {
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    },
+    "timestamp": "2025-10-15T14:59:47.360Z",
+    "tool": {
+      "phase": "use",
+      "name": "Bash",
+      "identifier": "toolu_01S2wbJqAEYdvQ42VoSv7zEt",
+      "input": {
+        "command": "echo $((1+1))",
+        "description": "Calculate 1+1"
+      },
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    }
+  },
+  {
+    "actor": "assistant",
+    "category": "tool_use",
+    "label": "Tool Use · Bash",
+    "text": "Tool call: Bash\n{\n  \"command\": \"echo $((2+2))\",\n  \"description\": \"Calculate 2+2\"\n}",
+    "data": {
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    },
+    "timestamp": "2025-10-15T14:59:47.413Z",
+    "tool": {
+      "phase": "use",
+      "name": "Bash",
+      "identifier": "toolu_01PLa2FzSBPrN6n7GdxyYJVQ",
+      "input": {
+        "command": "echo $((2+2))",
+        "description": "Calculate 2+2"
+      },
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    }
+  },
+  {
+    "actor": "system",
+    "category": "system",
+    "label": "System",
+    "text": "{\n  \"content\": \"\\u001b[1mPreToolUse:Bash\\u001b[22m [curl -s -X POST http://localhost:59948/claude_code/hooks -H 'Content-Type: application/json' --data-binary @- 2>/dev/null || echo] completed successfully: Hook received\",\n  \"cwd\": \"/Users/moonshot/Projects/AgentDev\",\n  \"gitBranch\": \"feat/ui\",\n  \"isMeta\": false,\n  \"isSidechain\": false,\n  \"level\": \"info\",\n  \"parentUuid\": \"5689db6f-3f69-46b4-900e-aaa79246730f\",\n  \"sessionId\": \"c3bcc6a0-de15-480b-94ec-f0f0521abf18\",\n  \"subtype\": \"informational\",\n  \"timestamp\": \"2025-10-15T14:59:47.475Z\",\n  \"toolUseID\": \"toolu_01S2wbJqAEYdvQ42VoSv7zEt\",\n  \"type\": \"system\",\n  \"userType\": \"external\",\n  \"uuid\": \"41933451-fe7c-4b7d-b19e-55bbc417276c\",\n  \"version\": \"2.0.15\"\n}",
+    "data": {
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    },
+    "timestamp": "2025-10-15T14:59:47.475Z"
+  },
+  {
+    "actor": "user",
+    "category": "tool_result",
+    "label": "Tool Result",
+    "text": "\"2\"",
+    "summary_text": "\"2\"",
+    "data": {
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    },
+    "timestamp": "2025-10-15T14:59:50.283Z",
+    "tool": {
+      "phase": "result",
+      "identifier": "toolu_01S2wbJqAEYdvQ42VoSv7zEt",
+      "output": "2",
+      "working_dir": "/Users/moonshot/Projects/AgentDev",
+      "extras": {
+        "is_error": false
+      }
+    }
+  },
+  {
+    "actor": "system",
+    "category": "system",
+    "label": "System",
+    "text": "{\n  \"content\": \"\\u001b[1mPreToolUse:Bash\\u001b[22m [curl -s -X POST http://localhost:59948/claude_code/hooks -H 'Content-Type: application/json' --data-binary @- 2>/dev/null || echo] completed successfully: Hook received\",\n  \"cwd\": \"/Users/moonshot/Projects/AgentDev\",\n  \"gitBranch\": \"feat/ui\",\n  \"isMeta\": false,\n  \"isSidechain\": false,\n  \"level\": \"info\",\n  \"parentUuid\": \"f5774935-9687-4047-abdb-d271922b7b7c\",\n  \"sessionId\": \"c3bcc6a0-de15-480b-94ec-f0f0521abf18\",\n  \"subtype\": \"informational\",\n  \"timestamp\": \"2025-10-15T14:59:50.313Z\",\n  \"toolUseID\": \"toolu_01PLa2FzSBPrN6n7GdxyYJVQ\",\n  \"type\": \"system\",\n  \"userType\": \"external\",\n  \"uuid\": \"e68a3eda-c43c-47cd-8655-cf56421e852c\",\n  \"version\": \"2.0.15\"\n}",
+    "data": {
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    },
+    "timestamp": "2025-10-15T14:59:50.313Z"
+  },
+  {
+    "actor": "user",
+    "category": "tool_result",
+    "label": "Tool Result",
+    "text": "\"4\"",
+    "summary_text": "\"4\"",
+    "data": {
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    },
+    "timestamp": "2025-10-15T14:59:51.931Z",
+    "tool": {
+      "phase": "result",
+      "identifier": "toolu_01PLa2FzSBPrN6n7GdxyYJVQ",
+      "output": "4",
+      "working_dir": "/Users/moonshot/Projects/AgentDev",
+      "extras": {
+        "is_error": false
+      }
+    }
+  },
+  {
+    "actor": "assistant",
+    "category": "assistant",
+    "label": "Assistant",
+    "text": "计算结果：\n- 1+1 = **2**\n- 2+2 = **4**",
+    "data": {
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    },
+    "timestamp": "2025-10-15T15:00:44.390Z"
+  },
+  {
+    "actor": "system",
+    "category": "system",
+    "label": "System",
+    "text": "{\n  \"content\": \"\\u001b[1mStop\\u001b[22m [curl -s -X POST http://localhost:59948/claude_code/hooks -H 'Content-Type: application/json' --data-binary @- 2>/dev/null || echo] completed successfully: Hook received\",\n  \"cwd\": \"/Users/moonshot/Projects/AgentDev\",\n  \"gitBranch\": \"feat/ui\",\n  \"isMeta\": false,\n  \"isSidechain\": false,\n  \"level\": \"info\",\n  \"parentUuid\": \"15c4f923-6511-4627-a710-b25d7d91c81e\",\n  \"sessionId\": \"c3bcc6a0-de15-480b-94ec-f0f0521abf18\",\n  \"subtype\": \"informational\",\n  \"timestamp\": \"2025-10-15T15:00:44.544Z\",\n  \"toolUseID\": \"85c2c3fd-2fea-4163-8d7a-5d49fcc3fede\",\n  \"type\": \"system\",\n  \"userType\": \"external\",\n  \"uuid\": \"25ea2bb1-e912-4d35-9fdf-66f5f356328a\",\n  \"version\": \"2.0.15\"\n}",
+    "data": {
+      "working_dir": "/Users/moonshot/Projects/AgentDev"
+    },
+    "timestamp": "2025-10-15T15:00:44.544Z"
+  }
+]

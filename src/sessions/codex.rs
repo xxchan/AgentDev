@@ -8,10 +8,10 @@ use std::time::SystemTime;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use walkdir::WalkDir;
 
-use super::{SessionEvent, SessionProvider, SessionRecord};
+use super::{SessionEvent, SessionProvider, SessionRecord, SessionToolEvent, SessionToolPhase};
 
 pub struct CodexSessionProvider {
     sessions_dir: Option<PathBuf>,
@@ -263,7 +263,7 @@ impl CodexParsedEntry {
     }
 
     fn to_event(&self, include_raw: bool) -> Option<SessionEvent> {
-        let (category, actor, entry_category) = self.category_with_actor();
+        let (_category, mut actor, entry_category) = self.category_with_actor();
 
         let payload_value = self.payload_value();
 
@@ -310,12 +310,48 @@ impl CodexParsedEntry {
         }
 
         let working_dir = self.working_dir_hint();
-        let data = attach_working_dir(payload_value, working_dir);
+        let mut tool = payload_value
+            .as_ref()
+            .and_then(|payload| extract_codex_tool_event(payload, working_dir.as_deref()));
+        if let Some(tool_event) = tool.as_mut() {
+            if tool_event.working_dir.is_none() {
+                if let Some(dir) = working_dir.as_ref() {
+                    tool_event.working_dir = Some(dir.clone());
+                }
+            }
+        }
 
-        let label = actor
+        let data = attach_working_dir(payload_value, working_dir.clone());
+
+        let mut category_value = match entry_category {
+            CodexEntryCategory::Event(ref kind) => kind.clone(),
+            other => match other {
+                CodexEntryCategory::SessionMeta => "session_meta".to_string(),
+                CodexEntryCategory::ResponseItem => "response_item".to_string(),
+                CodexEntryCategory::UserMessage => "user_message".to_string(),
+                CodexEntryCategory::AssistantMessage => "assistant_message".to_string(),
+                CodexEntryCategory::Event(_) => unreachable!(),
+            },
+        };
+
+        let mut label = actor
             .as_ref()
             .map(|value| to_title_case(value))
-            .or_else(|| Some(to_title_case(&category)));
+            .or_else(|| Some(to_title_case(&category_value)));
+
+        if let Some(tool_event) = tool.as_ref() {
+            category_value = match tool_event.phase {
+                SessionToolPhase::Use => "tool_use".to_string(),
+                SessionToolPhase::Result => "tool_result".to_string(),
+            };
+            label = Some(tool_label(tool_event));
+            if actor.is_none() {
+                actor = Some(match tool_event.phase {
+                    SessionToolPhase::Use => "assistant".to_string(),
+                    SessionToolPhase::Result => "tool".to_string(),
+                });
+            }
+        }
 
         let timestamp = self.timestamp();
 
@@ -327,22 +363,14 @@ impl CodexParsedEntry {
 
         Some(SessionEvent {
             actor,
-            category: match entry_category {
-                CodexEntryCategory::Event(ref kind) => kind.clone(),
-                other => match other {
-                    CodexEntryCategory::SessionMeta => "session_meta".to_string(),
-                    CodexEntryCategory::ResponseItem => "response_item".to_string(),
-                    CodexEntryCategory::UserMessage => "user_message".to_string(),
-                    CodexEntryCategory::AssistantMessage => "assistant_message".to_string(),
-                    CodexEntryCategory::Event(_) => unreachable!(),
-                },
-            },
+            category: category_value,
             label,
             text: Some(trimmed.to_string()),
             summary_text: None,
             data,
             timestamp,
             raw,
+            tool,
         })
     }
 }
@@ -616,6 +644,128 @@ fn attach_working_dir(data: Option<Value>, working_dir: Option<String>) -> Optio
     }
 }
 
+fn extract_codex_tool_event(payload: &Value, working_dir: Option<&str>) -> Option<SessionToolEvent> {
+    let object = payload.as_object()?;
+    let entry_type = object
+        .get("type")
+        .or_else(|| object.get("payload_type"))
+        .and_then(|value| value.as_str())?;
+    let phase = match entry_type {
+        "tool_use" | "function_call" => SessionToolPhase::Use,
+        "tool_result" | "function_call_output" => SessionToolPhase::Result,
+        _ => return None,
+    };
+
+    let mut extras = Map::new();
+    for (key, value) in object.iter() {
+        if matches!(
+            key.as_str(),
+            "type"
+                | "payload_type"
+                | "role"
+                | "message"
+                | "content"
+                | "id"
+                | "tool_use_id"
+                | "call_id"
+                | "originator"
+                | "instructions"
+                | "cwd"
+                | "working_dir"
+                | "name"
+                | "input"
+                | "arguments"
+                | "output"
+                | "result"
+        ) {
+            continue;
+        }
+        extras.insert(key.clone(), value.clone());
+    }
+
+    let mut working_dir_value = working_dir.map(|dir| dir.to_string());
+    if working_dir_value.is_none() {
+        if let Some(dir) = object
+            .get("working_dir")
+            .or_else(|| object.get("cwd"))
+            .and_then(|value| value.as_str())
+        {
+            working_dir_value = Some(dir.to_string());
+        }
+    }
+
+    let input = object
+        .get("input")
+        .cloned()
+        .or_else(|| object.get("arguments").and_then(parse_jsonish_string));
+    let output = match phase {
+        SessionToolPhase::Use => None,
+        SessionToolPhase::Result => object
+            .get("output")
+            .or_else(|| object.get("result"))
+            .or_else(|| object.get("content"))
+            .and_then(parse_jsonish_string),
+    };
+
+    let identifier = object
+        .get("tool_use_id")
+        .or_else(|| object.get("call_id"))
+        .or_else(|| object.get("id"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+
+    if working_dir_value.is_none() {
+        if let Some(Value::Object(map)) = input.as_ref() {
+            if let Some(Value::String(dir)) = map
+                .get("workdir")
+                .or_else(|| map.get("cwd"))
+                .or_else(|| map.get("working_dir"))
+            {
+                working_dir_value = Some(dir.clone());
+            }
+        }
+    }
+
+    Some(SessionToolEvent {
+        phase,
+        name: object
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        identifier,
+        input,
+        output,
+        working_dir: working_dir_value,
+        extras,
+    })
+}
+
+fn parse_jsonish_string(value: &Value) -> Option<Value> {
+    match value {
+        Value::String(raw) => {
+            if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
+                Some(parsed)
+            } else {
+                Some(Value::String(raw.clone()))
+            }
+        }
+        other => Some(other.clone()),
+    }
+}
+
+fn tool_label(tool: &SessionToolEvent) -> String {
+    let phase = match tool.phase {
+        SessionToolPhase::Use => "Tool Use",
+        SessionToolPhase::Result => "Tool Result",
+    };
+
+    if let Some(name) = tool.name.as_ref().filter(|value| !value.is_empty()) {
+        format!("{phase} · {name}")
+    } else {
+        phase.to_string()
+    }
+}
+
 fn to_title_case(value: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     for segment in value.split(|c: char| c == '_' || c == '-' || c == ' ') {
@@ -818,59 +968,4 @@ fn pretty_json(value: &Value) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use expect_test::expect;
-    use serde_json::json;
-
-    fn snapshot(event: &SessionEvent) -> String {
-        serde_json::to_string_pretty(event).expect("serialize event")
-    }
-
-    #[test]
-    fn tool_use_event_snapshot() {
-        let raw = json!({
-            "type": "event_msg",
-            "timestamp": "2025-01-02T03:04:05Z",
-            "payload": {
-                "type": "tool_use",
-                "role": "assistant",
-                "name": "shell",
-                "input": {
-                    "command": "git status",
-                    "timeout": 30
-                },
-                "cwd": "/tmp/repo"
-            }
-        });
-
-        let entry = CodexParsedEntry::parse(raw).expect("parse codex entry");
-        let event = entry.to_event(false).expect("convert codex tool event");
-
-        expect![[r#"
-            {
-              "actor": "assistant",
-              "category": "tool_use",
-              "label": "Assistant",
-              "text": "{\n  \"cwd\": \"/tmp/repo\",\n  \"input\": {\n    \"command\": \"git status\",\n    \"timeout\": 30\n  },\n  \"name\": \"shell\",\n  \"role\": \"assistant\",\n  \"type\": \"tool_use\"\n}",
-              "data": {
-                "content": null,
-                "cwd": "/tmp/repo",
-                "id": null,
-                "input": {
-                  "command": "git status",
-                  "timeout": 30
-                },
-                "instructions": null,
-                "message": null,
-                "name": "shell",
-                "originator": null,
-                "role": "assistant",
-                "type": "tool_use",
-                "working_dir": "/tmp/repo"
-              },
-              "timestamp": "2025-01-02T03:04:05Z"
-            }"#]]
-        .assert_eq(&snapshot(&event));
-    }
-}
+mod tests;
