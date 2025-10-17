@@ -21,6 +21,7 @@ interface TagEntry {
 interface SpecialMessageBase {
   type: SpecialMessageType;
   title: string;
+  headline?: string;
   collapsible: boolean;
   defaultCollapsed: boolean;
   accent: "indigo" | "emerald" | "blue";
@@ -178,12 +179,41 @@ function buildToolRender(
   }
 
   const accent = getMessageAccent(detail);
-
+  const badgeTone =
+    tool.phase === "use"
+      ? "border-slate-200 bg-slate-100 text-slate-600"
+      : "border-stone-200 bg-stone-100 text-stone-600";
   const collapseCandidates = sections.map((section) => section.formatted);
   const shouldCollapse = collapseCandidates.some((value) => shouldCollapsePlainMessage(value));
   const accentDefault = accent.defaultCollapsed ?? false;
   const collapsible = shouldCollapse || accentDefault;
   const defaultCollapsed = accentDefault || shouldCollapse;
+  const header = (
+    <div className="flex w-full items-center justify-between gap-2">
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            "inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold leading-none",
+            badgeTone,
+          )}
+        >
+          f
+        </span>
+        <div className="flex flex-col">
+          <span
+            className={cn(
+              "text-xs font-semibold uppercase tracking-wide",
+              accent.title ?? "text-gray-600",
+            )}
+          >
+            {title}
+          </span>
+          {subtitle ? <span className="text-xs text-gray-500">{subtitle}</span> : null}
+        </div>
+      </div>
+      <span className="text-xs font-medium text-gray-400">{phaseLabel}</span>
+    </div>
+  );
 
   const content = (
     <div className="space-y-3">
@@ -222,6 +252,7 @@ function buildToolRender(
   );
 
   return {
+    header,
     title,
     subtitle,
     content,
@@ -274,6 +305,18 @@ function sortEntries(entries: TagEntry[], preferredOrder: string[]) {
   });
 }
 
+function deriveInstructionTitle(body: string): string | null {
+  const docMatch = body.match(/\b([A-Za-z0-9._-]+\.md)\b/);
+  if (docMatch) {
+    return docMatch[1];
+  }
+  const headingMatch = body.match(/^#{1,6}\s+(.+)$/m);
+  if (headingMatch) {
+    return headingMatch[1].trim();
+  }
+  return null;
+}
+
 function parseUserMessage(message: string): ParsedUserMessage {
   const trimmed = message.trim();
   const tagMatch = trimmed.match(/^<([a-z_]+)>([\s\S]*?)<\/\1>\s*$/i);
@@ -283,11 +326,13 @@ function parseUserMessage(message: string): ParsedUserMessage {
     const body = tagMatch[2].trim();
 
     if (tag === "user_instructions") {
+      const derivedTitle = deriveInstructionTitle(body);
       return {
         kind: "special",
         message: {
           type: "user_instructions",
-          title: "Codex AGENTS.md",
+          title: "Codex user instructions",
+          headline: derivedTitle ?? undefined,
           collapsible: true,
           defaultCollapsed: true,
           accent: "indigo",
@@ -433,14 +478,14 @@ function getMessageAccent(detail: SessionEvent): MessageAccent {
       };
     case "tool_use":
       return {
-        container: "border-blue-200 bg-blue-50",
-        title: "text-blue-700",
+        container: "border-slate-200 bg-slate-50",
+        title: "text-slate-700",
         defaultCollapsed: true,
       };
     case "tool_result":
       return {
-        container: "border-cyan-200 bg-cyan-50",
-        title: "text-cyan-700",
+        container: "border-stone-200 bg-stone-50",
+        title: "text-stone-700",
         defaultCollapsed: true,
       };
     case "response_item":
@@ -495,8 +540,27 @@ function buildDefaultRender(
   if (parsed.kind === "special") {
     const special = parsed.message;
     const titlePrefix = `#${index + 1}`;
-    const baseTitle = detail.label ?? special.title;
-    const composedTitle = baseTitle ? `${titlePrefix} · ${baseTitle}` : titlePrefix;
+    const segments: string[] = [];
+    const addSegment = (value?: string | null) => {
+      if (!value) {
+        return;
+      }
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return;
+      }
+      const lower = trimmed.toLowerCase();
+      if (!segments.some((segment) => segment.toLowerCase() === lower)) {
+        segments.push(trimmed);
+      }
+    };
+
+    addSegment(special.title);
+    addSegment(special.headline ?? null);
+    addSegment(detail.label ?? null);
+
+    const composedTitle =
+      segments.length > 0 ? `${titlePrefix} · ${segments.join(" · ")}` : titlePrefix;
     return {
       title: composedTitle,
       subtitle,
