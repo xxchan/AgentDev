@@ -312,6 +312,20 @@ const SPECIAL_MESSAGE_TAGS = new Set([
   'user_action',
 ]);
 
+const CONTEXT_ONLY_MESSAGE_TAGS = new Set(['user_instructions', 'environment_context']);
+
+function extractBlockTag(message: string): string | null {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^<([a-z0-9_\-:]+)>([\s\S]*?)<\/\1>\s*$/i);
+  if (!match) {
+    return null;
+  }
+  return match[1].toLowerCase();
+}
+
 function getPreviewMessages(session: SessionSummary): string[] {
   return session.user_messages_preview;
 }
@@ -325,12 +339,8 @@ function isSpecialTaggedUserMessage(message: string): boolean {
   if (!trimmed) {
     return true;
   }
-  const tagMatch = trimmed.match(/^<([a-z_]+)>([\s\S]*?)<\/\1>\s*$/i);
-  if (!tagMatch) {
-    return false;
-  }
-  const tag = tagMatch[1].toLowerCase();
-  return SPECIAL_MESSAGE_TAGS.has(tag);
+  const tag = extractBlockTag(trimmed);
+  return tag ? SPECIAL_MESSAGE_TAGS.has(tag) : false;
 }
 
 function isCodexInstructionPlaceholder(message: string, provider: string): boolean {
@@ -346,6 +356,21 @@ function isCodexInstructionPlaceholder(message: string, provider: string): boole
     return true;
   }
   return lower.includes('<user_instructions>');
+}
+
+function isContextOnlyUserMessage(message: string, provider: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (isCodexInstructionPlaceholder(trimmed, provider)) {
+    return true;
+  }
+  const tag = extractBlockTag(trimmed);
+  if (!tag) {
+    return false;
+  }
+  return CONTEXT_ONLY_MESSAGE_TAGS.has(tag);
 }
 
 function collectPlainUserMessages(session: SessionSummary): string[] {
@@ -365,7 +390,7 @@ function buildSessionPreview(session: SessionSummary): string {
     const trimmed = session.last_user_message.trim();
     if (
       trimmed.length > 0 &&
-      !isCodexInstructionPlaceholder(trimmed, session.provider)
+      !isContextOnlyUserMessage(trimmed, session.provider)
     ) {
       return trimmed;
     }
@@ -378,6 +403,16 @@ function buildSessionPreview(session: SessionSummary): string {
       if (lastPlain) {
         return lastPlain;
       }
+    }
+    const hasNonContextMessage = previewMessages.some((message) => {
+      const trimmed = message?.trim() ?? '';
+      if (!trimmed) {
+        return false;
+      }
+      return !isContextOnlyUserMessage(trimmed, session.provider);
+    });
+    if (!hasNonContextMessage) {
+      return 'Session context captured · no conversation yet';
     }
     for (let index = previewMessages.length - 1; index >= 0; index -= 1) {
       const candidate = previewMessages[index];
