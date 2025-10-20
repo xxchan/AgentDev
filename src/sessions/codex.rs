@@ -262,6 +262,24 @@ impl CodexParsedEntry {
         extract_working_dir_from_message(&self.raw)
     }
 
+    fn is_special_user_message(&self) -> bool {
+        self.raw_payload()
+            .and_then(codex_format_response_item)
+            .map(|text| {
+                let trimmed = text.trim_start();
+                trimmed
+                    .strip_prefix('<')
+                    .and_then(|rest| rest.split('>').next())
+                    .is_some_and(|tag| {
+                        matches!(
+                            tag,
+                            "user_instructions" | "environment_context" | "user_action"
+                        )
+                    })
+            })
+            .unwrap_or(false)
+    }
+
     fn to_event(&self, include_raw: bool) -> Option<SessionEvent> {
         let (_category, mut actor, entry_category) = self.category_with_actor();
 
@@ -276,10 +294,14 @@ impl CodexParsedEntry {
                 .as_ref()
                 .and_then(|payload| payload.payload_type.as_deref())
                 .is_some_and(|payload_type| payload_type.eq_ignore_ascii_case("message"))
+                && !self.is_special_user_message()
             {
-                // Codex emits both a response_item(message, user) and a follow-up
-                // event_msg(user_message) for the same user turn. Skip the redundant
-                // response_item so user messages only appear once in transcripts.
+                // Codex often emits both a response_item(message, user) and a
+                // follow-up event_msg(user_message) for the same user turn.
+                // Skip the redundant response_item so user messages only appear
+                // once in transcripts, except when the message is one of the
+                // tagged AGENTS sections that Codex does not mirror as an
+                // event_msg payload.
                 return None;
             }
         }

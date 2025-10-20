@@ -417,10 +417,7 @@ function buildToolRender(
   }
 
   const accent = getMessageAccent(detail);
-  const badgeTone =
-    tool.phase === "use"
-      ? "border-zinc-200 bg-zinc-50 text-zinc-600"
-      : "border-zinc-200 bg-zinc-50 text-zinc-600";
+  const badgeTone = accent.badge ?? "border-zinc-200 bg-zinc-50 text-zinc-600";
   const shouldCollapse = collapseCandidates.some((value) => shouldCollapsePlainMessage(value));
   const accentDefault = accent.defaultCollapsed ?? false;
   const collapsible = true;
@@ -648,16 +645,28 @@ function getSpecialMessageTitleClass(message: SpecialMessage): string {
 interface MessageAccent {
   container: string;
   title: string;
+  badge?: string;
   defaultCollapsed?: boolean;
 }
 
 const DEFAULT_MESSAGE_ACCENT: MessageAccent = {
   container: "border-gray-200 bg-gray-50",
   title: "text-gray-600",
+  badge: "border-gray-200 bg-gray-50 text-gray-600",
   defaultCollapsed: false,
 };
 
 function getMessageAccent(detail: SessionEvent): MessageAccent {
+  const category = detail.category.trim().toLowerCase();
+  if (category === "tool_use" || category === "tool_result") {
+    return {
+      container: "border-stone-300 bg-stone-100",
+      title: "text-stone-800",
+      badge: "border-stone-300 bg-stone-100 text-stone-700",
+      defaultCollapsed: true,
+    };
+  }
+
   const actor = detail.actor?.trim().toLowerCase();
   if (actor) {
     switch (actor) {
@@ -682,7 +691,6 @@ function getMessageAccent(detail: SessionEvent): MessageAccent {
     }
   }
 
-  const category = detail.category.trim().toLowerCase();
   switch (category) {
     case "session_meta":
       return {
@@ -700,18 +708,6 @@ function getMessageAccent(detail: SessionEvent): MessageAccent {
       return {
         container: "border-gray-200 bg-gray-50",
         title: "text-gray-600",
-        defaultCollapsed: true,
-      };
-    case "tool_use":
-      return {
-        container: "border-zinc-200 bg-zinc-50",
-        title: "text-zinc-700",
-        defaultCollapsed: true,
-      };
-    case "tool_result":
-      return {
-        container: "border-zinc-200 bg-zinc-50",
-        title: "text-zinc-700",
         defaultCollapsed: true,
       };
     case "response_item":

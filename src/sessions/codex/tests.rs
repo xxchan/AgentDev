@@ -110,7 +110,11 @@ fn real_session_tool_events_snapshot() {
 #[test]
 fn skips_duplicate_user_response_items() {
     let events = load_fixture("user_message_duplicate.jsonl");
-    assert_eq!(events.len(), 2, "should only emit one user and one assistant event");
+    assert_eq!(
+        events.len(),
+        2,
+        "should only emit one user and one assistant event"
+    );
 
     let user_event = &events[0];
     assert_eq!(user_event.actor.as_deref(), Some("user"));

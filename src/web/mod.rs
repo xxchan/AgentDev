@@ -33,7 +33,7 @@ impl Default for ServerOptions {
         Self {
             port: None,
             host: None,
-            auto_open_browser: true,
+            auto_open_browser: false,
         }
     }
 }
@@ -42,7 +42,8 @@ impl ServerOptions {
     /// Construct options using environment defaults (PORT/AGENTDEV_BACKEND_PORT,
     /// AGENTDEV_BACKEND_HOST/HOST).
     pub fn from_env() -> Self {
-        let port = std::env::var("PORT")
+        let mut options = Self::default();
+        options.port = std::env::var("PORT")
             .ok()
             .and_then(|value| value.parse::<u16>().ok())
             .or_else(|| {
@@ -50,12 +51,13 @@ impl ServerOptions {
                     .ok()
                     .and_then(|value| value.parse::<u16>().ok())
             });
-        let host = host_from_env();
-        Self {
-            port,
-            host,
-            ..Default::default()
+        options.host = host_from_env();
+        if let Ok(value) = std::env::var("AGENTDEV_AUTO_OPEN_BROWSER") {
+            let normalized = value.trim().to_ascii_lowercase();
+            options.auto_open_browser =
+                matches!(normalized.as_str(), "1" | "true" | "yes" | "y" | "on");
         }
+        options
     }
 
     /// Return a copy of the options with the port overridden.

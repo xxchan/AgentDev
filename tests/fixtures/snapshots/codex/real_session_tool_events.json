@@ -71,28 +71,6 @@
   },
   {
     "actor": "user",
-    "category": "response_item",
-    "label": "User",
-    "text": "claude code 的 sessions 好像列的不全？",
-    "data": {
-      "content": [
-        {
-          "text": "claude code 的 sessions 好像列的不全？",
-          "type": "input_text"
-        }
-      ],
-      "cwd": null,
-      "id": null,
-      "instructions": null,
-      "message": null,
-      "originator": null,
-      "role": "user",
-      "type": "message"
-    },
-    "timestamp": "2025-10-17T12:38:40.838Z"
-  },
-  {
-    "actor": "user",
     "category": "user_message",
     "label": "User",
     "text": "claude code 的 sessions 好像列的不全？",
@@ -1593,28 +1571,6 @@
       "type": "message"
     },
     "timestamp": "2025-10-17T12:58:53.545Z"
-  },
-  {
-    "actor": "user",
-    "category": "response_item",
-    "label": "User",
-    "text": "所以你现在 claude code 的session 确定加载好了吗",
-    "data": {
-      "content": [
-        {
-          "text": "所以你现在 claude code 的session 确定加载好了吗",
-          "type": "input_text"
-        }
-      ],
-      "cwd": null,
-      "id": null,
-      "instructions": null,
-      "message": null,
-      "originator": null,
-      "role": "user",
-      "type": "message"
-    },
-    "timestamp": "2025-10-17T13:00:49.729Z"
   },
   {
     "actor": "user",
