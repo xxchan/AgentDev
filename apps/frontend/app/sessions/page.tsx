@@ -1,12 +1,6 @@
 'use client';
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ChangeEvent,
-} from 'react';
+import { useCallback, useEffect, useMemo, useState, useId, type ChangeEvent } from 'react';
 import { HelpCircle } from 'lucide-react';
 import MainLayout from '@/components/layout/MainLayout';
 import SessionListView, { SessionListItem, SessionListMessage } from '@/components/SessionListView';
@@ -501,6 +495,8 @@ interface SessionGroupSidebarProps {
   selectedGroupId: string;
   onSelect: (groupId: string) => void;
   isLoading: boolean;
+  searchTerm: string;
+  onSearchTermChange: (value: string) => void;
 }
 
 function SessionGroupSidebar({
@@ -508,18 +504,39 @@ function SessionGroupSidebar({
   selectedGroupId,
   onSelect,
   isLoading,
+  searchTerm,
+  onSearchTermChange,
 }: SessionGroupSidebarProps) {
   const sections = groupSessionGroups(groups);
+  const hasSearch = searchTerm.trim().length > 0;
+  const searchInputId = useId();
+
+  const handleSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
+    onSearchTermChange(event.target.value);
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-border px-3 pb-2 pt-3">
+      <div className="border-b border-border px-3 pb-3 pt-3">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Session Folders
         </h2>
         <p className="mt-1 text-[0.7rem] text-muted-foreground/80">
           Grouped by worktree or directory
         </p>
+        <div className="mt-3">
+          <label htmlFor={searchInputId} className="sr-only">
+            Search session folders
+          </label>
+          <input
+            id={searchInputId}
+            type="text"
+            value={searchTerm}
+            onChange={handleSearchChange}
+            placeholder="Search directories…"
+            className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+          />
+        </div>
       </div>
       {isLoading && groups.length === 0 ? (
         <div className="px-3 py-4 text-sm text-muted-foreground">
@@ -532,7 +549,11 @@ function SessionGroupSidebar({
       <ScrollArea className="flex-1 min-h-0">
         {sections.length === 0 ? (
           <div className="px-3 py-4 text-xs text-muted-foreground/80">
-            {isLoading ? 'Collecting session metadata…' : 'No session groups found.'}
+            {isLoading
+              ? 'Collecting session metadata…'
+              : hasSearch
+                ? 'No matching folders. Try a different search.'
+                : 'No session groups found.'}
           </div>
         ) : (
           sections.map((section) => (
@@ -999,6 +1020,7 @@ export default function SessionsPage() {
   const { groups, groupsById, sessionsByGroup, sessionByKey, defaultGroupId } = sessionIndex;
 
   const [selectedGroupId, setSelectedGroupId] = useState<string>(defaultGroupId);
+  const [groupSearchTerm, setGroupSearchTerm] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null);
 
@@ -1012,8 +1034,51 @@ export default function SessionsPage() {
     }
   }, [groups, groupsById, selectedGroupId, defaultGroupId]);
 
+  const normalizedGroupSearch = useMemo(
+    () => groupSearchTerm.trim().toLowerCase(),
+    [groupSearchTerm],
+  );
+
+  const visibleGroups = useMemo(() => {
+    if (!normalizedGroupSearch) {
+      return groups;
+    }
+    return groups.filter((group) => {
+      const haystack = [
+        group.label,
+        group.description ?? '',
+        group.workingDir ?? '',
+        group.workingDirKey ?? '',
+        group.worktreeId ?? '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(normalizedGroupSearch);
+    });
+  }, [groups, normalizedGroupSearch]);
+
+  useEffect(() => {
+    if (!normalizedGroupSearch) {
+      return;
+    }
+    if (visibleGroups.length === 0) {
+      return;
+    }
+    if (!visibleGroups.some((group) => group.id === selectedGroupId)) {
+      setSelectedGroupId(visibleGroups[0].id);
+    }
+  }, [normalizedGroupSearch, visibleGroups, selectedGroupId]);
+
+  const isSelectedGroupVisible = useMemo(
+    () => visibleGroups.some((group) => group.id === selectedGroupId),
+    [visibleGroups, selectedGroupId],
+  );
+
   const normalizedSearch = useMemo(() => searchTerm.trim().toLowerCase(), [searchTerm]);
   const visibleSessions = useMemo(() => {
+    if (!isSelectedGroupVisible) {
+      return [];
+    }
     const base = sessionsByGroup.get(selectedGroupId) ?? [];
     if (!normalizedSearch) {
       return base;
@@ -1038,7 +1103,7 @@ export default function SessionsPage() {
         .toLowerCase();
       return haystack.includes(normalizedSearch);
     });
-  }, [sessionsByGroup, selectedGroupId, normalizedSearch]);
+  }, [sessionsByGroup, selectedGroupId, normalizedSearch, isSelectedGroupVisible]);
 
   useEffect(() => {
     if (visibleSessions.length === 0) {
@@ -1304,10 +1369,12 @@ export default function SessionsPage() {
 
   const sidebar = (
     <SessionGroupSidebar
-      groups={groups}
+      groups={visibleGroups}
       selectedGroupId={selectedGroupId}
       onSelect={setSelectedGroupId}
       isLoading={isLoading}
+      searchTerm={groupSearchTerm}
+      onSearchTermChange={setGroupSearchTerm}
     />
   );
 
