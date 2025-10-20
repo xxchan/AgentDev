@@ -10,8 +10,15 @@
 - **清理调试残留。** 结束前停掉后台进程、还原环境，避免影响下一次迭代。
 - **同步 UI 观察。** 在自测时截图或记录关键页面的视觉状况，如果发现灰度噪点、信息拥挤等明显设计问题，要在提交描述中说明观察结论和后续打算。
 - **先看会话快照。** 调试或开发 Sessions 相关功能时，优先查看 `tests/fixtures/snapshots/*` 里的 snapshot，或者临时运行 `cargo test sessions::codex::tests::real_session_tool_events_snapshot` 等用例确认数据形态，再接着改 API/UI 逻辑；这份 snapshot 对应 `GET /api/sessions/:provider/:session_id?mode=full` 返回体中的 `events`（由 `CodexSessionProvider::load_session_events` 生成）。
+- 如果要使用 take_screenshot 工具，请带文件名。
 
 没有完成上述验证就交付等同于把不确定的问题留给用户。请把“先自测再汇报”当成整个项目的硬性约束。
+
+## 最近迭代经验总结
+
+- Git diff 和 Session 列表改造时先梳理 `rg` 结果、一次性提炼共享 token/样式表，比逐个替换散落的 `bg-gray-*` 更高效。
+- apply_patch 多次失败会拖慢节奏，规模较大的替换可以先落库到工具函数/常量，再用脚本或结构化更新减少反复尝试。
+- lint/build 等耗时校验建议在主要改动完成后集中执行，避免在局部调试阶段重复等待 Next.js/Rust 构建。
 
 本工具已从 xlaude 更名为 agentdev：
 - 可执行文件名：`agentdev`
