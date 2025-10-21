@@ -24,7 +24,7 @@ use crate::{
         ProcessStatus as RegistryProcessStatus, canonicalize_cwd,
     },
     sessions::{
-        SessionEvent, SessionRecord, canonicalize as canonicalize_session_path, default_providers,
+        SessionEvent, SessionProvider, SessionRecord, canonicalize as canonicalize_session_path, default_providers,
     },
     state::{WorktreeInfo, XlaudeState},
 };
@@ -175,6 +175,7 @@ pub struct ProviderSessionsPayload {
 #[serde(rename_all = "snake_case")]
 pub enum SessionDetailMode {
     UserOnly,
+    Conversation,
     Full,
 }
 
@@ -405,6 +406,7 @@ fn load_session_detail(
                 let events = match mode {
                     SessionDetailMode::Full => provider.load_session_events(&record)?,
                     SessionDetailMode::UserOnly => user_messages_to_events(&record),
+                    SessionDetailMode::Conversation => conversation_events(&record, &provider)?,
                 };
 
                 let working_dir = record
@@ -445,6 +447,31 @@ fn user_messages_to_events(record: &SessionRecord) -> Vec<SessionEvent> {
             tool: None,
         })
         .collect()
+}
+
+fn conversation_events(record: &SessionRecord, provider: &Box<dyn SessionProvider + Send + Sync>) -> Result<Vec<SessionEvent>> {
+    let all_events = provider.load_session_events(record)?;
+    Ok(all_events
+        .into_iter()
+        .filter(|event| {
+            // Filter out tool-related events
+            if event.tool.is_some() {
+                return false;
+            }
+            let category_lower = event.category.to_lowercase();
+            if category_lower.contains("tool") {
+                return false;
+            }
+
+            // Only keep user and assistant messages
+            if let Some(actor) = &event.actor {
+                let actor_lower = actor.to_lowercase();
+                actor_lower == "user" || actor_lower == "assistant"
+            } else {
+                false
+            }
+        })
+        .collect())
 }
 
 #[derive(Clone)]

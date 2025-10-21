@@ -48,7 +48,7 @@ export interface SessionProviderSummary {
   latest_timestamp?: string | null;
 }
 
-export type SessionDetailMode = 'user_only' | 'full';
+export type SessionDetailMode = 'user_only' | 'conversation' | 'full';
 
 export interface SessionEvent {
   actor?: string;

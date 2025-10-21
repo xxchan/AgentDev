@@ -931,6 +931,7 @@ interface DetailModeToggleProps {
 function DetailModeToggle({ value, onChange }: DetailModeToggleProps) {
   const options: Array<{ value: SessionDetailMode; label: string }> = [
     { value: 'user_only', label: 'User turns' },
+    { value: 'conversation', label: 'Conversation' },
     { value: 'full', label: 'Full transcript' },
   ];
 
@@ -1004,7 +1005,7 @@ export default function SessionsPage() {
       return;
     }
     const stored = window.localStorage.getItem(DETAIL_MODE_STORAGE_KEY);
-    if (stored === 'user_only' || stored === 'full') {
+    if (stored === 'user_only' || stored === 'conversation' || stored === 'full') {
       setDetailMode(stored as SessionDetailMode);
     }
   }, []);
@@ -1166,24 +1167,33 @@ export default function SessionsPage() {
 
   const fullDetailKey =
     baseSessionKey !== null ? buildDetailCacheKey(baseSessionKey, 'full') : null;
+  const conversationDetailKey =
+    baseSessionKey !== null ? buildDetailCacheKey(baseSessionKey, 'conversation') : null;
   const userOnlyDetailKey =
     baseSessionKey !== null ? buildDetailCacheKey(baseSessionKey, 'user_only') : null;
 
   const fullDetail = fullDetailKey ? detailCache[fullDetailKey] : undefined;
+  const conversationDetail = conversationDetailKey ? detailCache[conversationDetailKey] : undefined;
   const userOnlyDetail = userOnlyDetailKey ? detailCache[userOnlyDetailKey] : undefined;
 
   const detailResponse =
-    detailMode === 'full' ? fullDetail : userOnlyDetail ?? fullDetail;
+    detailMode === 'full'
+      ? fullDetail
+      : detailMode === 'conversation'
+        ? conversationDetail
+        : userOnlyDetail ?? fullDetail;
 
   const detailError =
     detailMode === 'full'
       ? (fullDetailKey ? detailErrors[fullDetailKey] : undefined)
-      : (() => {
-          if (userOnlyDetailKey && detailErrors[userOnlyDetailKey]) {
-            return detailErrors[userOnlyDetailKey];
-          }
-          return fullDetailKey ? detailErrors[fullDetailKey] : undefined;
-        })();
+      : detailMode === 'conversation'
+        ? (conversationDetailKey ? detailErrors[conversationDetailKey] : undefined)
+        : (() => {
+            if (userOnlyDetailKey && detailErrors[userOnlyDetailKey]) {
+              return detailErrors[userOnlyDetailKey];
+            }
+            return fullDetailKey ? detailErrors[fullDetailKey] : undefined;
+          })();
 
   const desiredFetch =
     selectedSession && baseSessionKey
@@ -1192,6 +1202,12 @@ export default function SessionsPage() {
             return {
               key: buildDetailCacheKey(baseSessionKey, 'full'),
               mode: 'full' as SessionDetailMode,
+            };
+          }
+          if (detailMode === 'conversation') {
+            return {
+              key: buildDetailCacheKey(baseSessionKey, 'conversation'),
+              mode: 'conversation' as SessionDetailMode,
             };
           }
           if (detailMode === 'user_only' && previewTruncated && !fullDetail) {
@@ -1284,7 +1300,9 @@ export default function SessionsPage() {
     let messageItems: SessionListMessage[] =
       detailMode === 'full'
         ? toSessionListMessages(detailResponse?.events ?? [], sessionKey, 'full')
-        : buildUserOnlyMessages(selectedSession, detailResponse);
+        : detailMode === 'conversation'
+          ? toSessionListMessages(detailResponse?.events ?? [], sessionKey, 'conversation')
+          : buildUserOnlyMessages(selectedSession, detailResponse);
 
     if (detailMode === 'user_only') {
       const shownUserMessages = messageItems.filter(
@@ -1369,7 +1387,7 @@ export default function SessionsPage() {
       ),
     };
 
-    if (detailMode === 'full') {
+    if (detailMode === 'full' || detailMode === 'conversation') {
       if (detailLoading) {
         item.emptyState = (
           <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
@@ -1384,7 +1402,10 @@ export default function SessionsPage() {
           </div>
         );
       } else if (messageItems.length === 0) {
-        item.emptyState = 'No transcript entries found.';
+        item.emptyState =
+          detailMode === 'conversation'
+            ? 'No conversation messages found.'
+            : 'No transcript entries found.';
       }
     } else if (messageItems.filter((entry) => (entry.detail.actor ?? '').toLowerCase() === 'user').length === 0) {
       item.emptyState = 'No user messages recorded.';
