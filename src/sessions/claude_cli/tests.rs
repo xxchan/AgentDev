@@ -88,8 +88,7 @@ fn tool_use_event_snapshot() {
               "paths": [
                 "src/lib.rs"
               ]
-            },
-            "working_dir": "/tmp/repo"
+            }
           }
         }"#]]
     .assert_eq(&serde_json::to_string_pretty(&event).expect("serialize event"));

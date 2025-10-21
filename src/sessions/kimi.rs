@@ -280,16 +280,7 @@ impl KimiSessionProvider {
             let (_, _, entry_category) = entry.category_with_actor();
             entry.apply_summary(&mut record, &entry_category);
 
-            if let Some(mut event) = entry.to_event(false) {
-                if let Some(tool) = event.tool.as_mut() {
-                    if tool.working_dir.is_none() {
-                        if let Some(dir) =
-                            record.working_dir.as_ref().and_then(|path| path.to_str())
-                        {
-                            tool.working_dir = Some(dir.to_string());
-                        }
-                    }
-                }
+            if let Some(event) = entry.to_event(false) {
                 record.ingest_event(&event);
             }
         }
@@ -453,16 +444,7 @@ impl SessionProvider for KimiSessionProvider {
                 continue;
             };
 
-            if let Some(mut event) = entry.to_event(true) {
-                if let Some(tool) = event.tool.as_mut() {
-                    if tool.working_dir.is_none() {
-                        if let Some(dir) =
-                            record.working_dir.as_ref().and_then(|path| path.to_str())
-                        {
-                            tool.working_dir = Some(dir.to_string());
-                        }
-                    }
-                }
+            if let Some(event) = entry.to_event(true) {
                 events.push(event);
             }
         }

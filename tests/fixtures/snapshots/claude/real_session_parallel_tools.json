@@ -42,8 +42,7 @@
       "input": {
         "command": "echo $((1+1))",
         "description": "Calculate 1+1"
-      },
-      "working_dir": "/Users/moonshot/Projects/AgentDev"
+      }
     }
   },
   {
@@ -62,8 +61,7 @@
       "input": {
         "command": "echo $((2+2))",
         "description": "Calculate 2+2"
-      },
-      "working_dir": "/Users/moonshot/Projects/AgentDev"
+      }
     }
   },
   {
@@ -90,7 +88,6 @@
       "phase": "result",
       "identifier": "toolu_01S2wbJqAEYdvQ42VoSv7zEt",
       "output": "2",
-      "working_dir": "/Users/moonshot/Projects/AgentDev",
       "extras": {
         "is_error": false
       }
@@ -120,7 +117,6 @@
       "phase": "result",
       "identifier": "toolu_01PLa2FzSBPrN6n7GdxyYJVQ",
       "output": "4",
-      "working_dir": "/Users/moonshot/Projects/AgentDev",
       "extras": {
         "is_error": false
       }

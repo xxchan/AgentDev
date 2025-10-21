@@ -351,16 +351,9 @@ impl CodexParsedEntry {
         }
 
         let working_dir = self.working_dir_hint();
-        let mut tool = payload_value
+        let tool = payload_value
             .as_ref()
-            .and_then(|payload| extract_codex_tool_event(payload, working_dir.as_deref()));
-        if let Some(tool_event) = tool.as_mut() {
-            if tool_event.working_dir.is_none() {
-                if let Some(dir) = working_dir.as_ref() {
-                    tool_event.working_dir = Some(dir.clone());
-                }
-            }
-        }
+            .and_then(extract_codex_tool_event);
 
         let data = attach_working_dir(payload_value, working_dir.clone());
 
@@ -685,10 +678,7 @@ fn attach_working_dir(data: Option<Value>, working_dir: Option<String>) -> Optio
     }
 }
 
-fn extract_codex_tool_event(
-    payload: &Value,
-    working_dir: Option<&str>,
-) -> Option<SessionToolEvent> {
+fn extract_codex_tool_event(payload: &Value) -> Option<SessionToolEvent> {
     let object = payload.as_object()?;
     let entry_type = object
         .get("type")
@@ -727,16 +717,12 @@ fn extract_codex_tool_event(
         extras.insert(key.clone(), value.clone());
     }
 
-    let mut working_dir_value = working_dir.map(|dir| dir.to_string());
-    if working_dir_value.is_none() {
-        if let Some(dir) = object
-            .get("working_dir")
-            .or_else(|| object.get("cwd"))
-            .and_then(|value| value.as_str())
-        {
-            working_dir_value = Some(dir.to_string());
-        }
-    }
+    // Extract working_dir only from the message itself, not from session hint
+    let mut working_dir_value = object
+        .get("working_dir")
+        .or_else(|| object.get("cwd"))
+        .and_then(|value| value.as_str())
+        .map(|dir| dir.to_string());
 
     let input = object
         .get("input")

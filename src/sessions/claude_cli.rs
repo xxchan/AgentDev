@@ -175,8 +175,6 @@ impl ClaudeParsedEntry {
             None
         };
 
-        let working_dir_hint = self.cwd().map(|value| value.to_string());
-
         let mut data_map = serde_json::Map::new();
         if let Some(cwd) = self.working_dir_value() {
             data_map.insert("working_dir".to_string(), cwd);
@@ -190,14 +188,7 @@ impl ClaudeParsedEntry {
             Some(Value::Object(data_map))
         };
 
-        let mut tool = extract_claude_tool_event(&self.raw, working_dir_hint.as_deref());
-        if let Some(tool_event) = tool.as_mut() {
-            if tool_event.working_dir.is_none() {
-                if let Some(dir) = working_dir_hint.as_ref() {
-                    tool_event.working_dir = Some(dir.clone());
-                }
-            }
-        }
+        let tool = extract_claude_tool_event(&self.raw);
 
         let mut category_value = category;
         let mut label = actor
@@ -571,7 +562,7 @@ fn format_message_content(value: &Value) -> Option<String> {
     }
 }
 
-fn extract_claude_tool_event(raw: &Value, working_dir: Option<&str>) -> Option<SessionToolEvent> {
+fn extract_claude_tool_event(raw: &Value) -> Option<SessionToolEvent> {
     let message = raw.get("message")?.as_object()?;
     let content = message.get("content")?;
     let items = content.as_array()?;
@@ -615,16 +606,12 @@ fn extract_claude_tool_event(raw: &Value, working_dir: Option<&str>) -> Option<S
         extras.insert(key.clone(), value.clone());
     }
 
-    let mut working_dir_value = working_dir.map(|value| value.to_string());
-    if working_dir_value.is_none() {
-        if let Some(dir) = obj
-            .get("working_dir")
-            .or_else(|| obj.get("cwd"))
-            .and_then(|value| value.as_str())
-        {
-            working_dir_value = Some(dir.to_string());
-        }
-    }
+    // Extract working_dir only from the message itself, not from session hint
+    let working_dir_value = obj
+        .get("working_dir")
+        .or_else(|| obj.get("cwd"))
+        .and_then(|value| value.as_str())
+        .map(|dir| dir.to_string());
 
     let input = obj.get("input").cloned();
     let output = match phase {
