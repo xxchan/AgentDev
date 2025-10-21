@@ -1,13 +1,16 @@
 # agentdev
 
-一个用来快速对比多种 AI Agent 方案（agent 赛马🏇）的极简工具：一条命令启动任务，仪表盘里横向对比，满意就附着继续干，最后一键清理。
+Features
+- Worktree 管理多 agent 并行开发
+- 多 agent 跑同一个任务赛马🏇
+- Worktrees / Sessions UI
 
 ## 安装
 
 [Install Rust](https://www.rust-lang.org/tools/install)
 
 ```bash
-cargo install --git https://github.com/xxchan/AgentDev
+cargo install --git https://github.com/xxchan/AgentDev agentdev
 ```
 
 ## 配置
@@ -38,29 +41,11 @@ agentdev dashboard  # 左侧按任务分组；右侧显示 Initial prompt、分�
 agentdev delete-task <task>
 ```
 
-## 开发仪表盘 / UI
+## UI
 
-仓库内置了前后端联调脚本，默认会在一个 tmux 会话里同时启动 Rust 后端和 Next.js 开发服务器，刷新即热加载。
-
-```bash
-# 项目根目录
-pnpm install              # 首次需要安装前端依赖
-pnpm run dev:ui           # 创建 agentdev_dev tmux 会话
-tmux attach -t agentdev_dev   # 查看日志或交互，CTRL+B D 可分离
-```
-
-- 后端监听 `http://localhost:3000`，前端 dev server 监听 `http://localhost:3100`，UI 内发往 `/api/*` 的请求会自动代理到后端。
-- 可通过环境变量调整端口或代理地址：
-  - `AGENTDEV_BACKEND_HOST`（默认 `127.0.0.1`）
-  - `AGENTDEV_BACKEND_PORT`（默认 `3000`）
-  - `AGENTDEV_FRONTEND_PORT`（默认 `3100`）
-  - `AGENTDEV_API_BASE`（默认 `http://localhost:<AGENTDEV_BACKEND_PORT>`）
-- 若需要对外暴露，请使用 `agentdev ui --host 0.0.0.0`（或设置 `AGENTDEV_BACKEND_HOST`）并自行做好网络与鉴权防护。
-- 退出时记得 `tmux kill-session -t agentdev_dev` 或在 tmux 内 `exit`，避免残留进程占用端口。
-
-生产构建仍然使用静态导出：
+- /sessions 页面: 查看本地所有 agent sessions（不依赖）
+- /worktrees 页面: 查看 agentdev 管理的 worktrees 里的 agent sessions / git diff
 
 ```bash
-pnpm run build:frontend   # 生成 apps/frontend/out 静态资源
-cargo build --release     # 构建带内嵌 dashboard 的后端
+agentdev ui
 ```
