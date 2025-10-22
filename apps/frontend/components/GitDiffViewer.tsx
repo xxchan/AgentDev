@@ -324,7 +324,12 @@ const GitDiffViewer = forwardRef<GitDiffViewerHandle, GitDiffViewerProps>(
           </div>
         )}
 
-        <div className={clsx('overflow-auto', theme === 'light' ? 'max-h-[40rem] bg-white' : 'max-h-[32rem] bg-gray-950')}>
+        <div
+          className={clsx(
+            'overflow-x-auto overflow-y-visible',
+            theme === 'light' ? 'bg-white' : 'bg-gray-950',
+          )}
+        >
           <DiffView
             ref={diffViewRef}
             key={`${parsedPaths.label}:${effectiveMode}:${effectiveWrap}`}

@@ -3,14 +3,21 @@ import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { cn } from '@/lib/utils';
 
 interface MainLayoutProps {
   sidebar: ReactNode;
   main: ReactNode;
   bottom?: ReactNode;
+  isBottomCollapsed?: boolean;
 }
 
-export default function MainLayout({ sidebar, main, bottom }: MainLayoutProps) {
+export default function MainLayout({
+  sidebar,
+  main,
+  bottom,
+  isBottomCollapsed = false,
+}: MainLayoutProps) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       {/* Header */}
@@ -53,10 +60,14 @@ export default function MainLayout({ sidebar, main, bottom }: MainLayoutProps) {
           <main className="flex flex-1 min-h-0 flex-col overflow-hidden bg-card">
             {main}
           </main>
-
-          {/* Bottom processes panel */}
           {bottom ? (
-            <div className="h-80 border-t border-border bg-card">
+            <div
+              className={cn(
+                'border-t border-border bg-card transition-[height] duration-200 ease-in-out',
+                'flex flex-col',
+                isBottomCollapsed ? 'h-12' : 'h-80',
+              )}
+            >
               {bottom}
             </div>
           ) : null}

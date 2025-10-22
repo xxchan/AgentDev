@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import clsx from 'clsx';
@@ -58,6 +59,7 @@ export default function WorktreeDetails({
   worktree,
   isLoading,
 }: WorktreeDetailsProps) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const commandEndpoint = useMemo(() => {
     if (!worktree) {
       return null;
@@ -234,7 +236,7 @@ export default function WorktreeDetails({
   );
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div ref={scrollContainerRef} className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 px-6 py-6">
         <section className="rounded-lg border border-gray-200 bg-white px-6 py-5 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -361,6 +363,7 @@ export default function WorktreeDetails({
               commitsAhead={commitsAhead}
               formatTimestamp={formatTimestamp}
               defaultExpanded
+              scrollContainerRef={scrollContainerRef}
             />
           )}
         </div>

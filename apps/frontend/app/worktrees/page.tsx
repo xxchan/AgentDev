@@ -13,6 +13,8 @@ export default function WorktreesPage() {
   const [selectedWorktreeId, setSelectedWorktreeId] = useState<string | null>(
     null,
   );
+  const [isProcessPanelCollapsed, setIsProcessPanelCollapsed] =
+    useState(true);
 
   useEffect(() => {
     if (worktrees.length === 0) {
@@ -47,8 +49,13 @@ export default function WorktreesPage() {
         <WorktreeProcesses
           worktreeId={selectedWorktreeId}
           worktreeName={selectedWorktree?.name ?? null}
+          isCollapsed={isProcessPanelCollapsed}
+          onToggleCollapsed={() =>
+            setIsProcessPanelCollapsed((current) => !current)
+          }
         />
       }
+      isBottomCollapsed={isProcessPanelCollapsed}
     />
   );
 }

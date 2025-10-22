@@ -2,11 +2,13 @@
 
 import {
   FormEvent,
+  ReactNode,
   useCallback,
   useEffect,
   useMemo,
   useState,
 } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { useWorktreeProcesses } from '@/hooks/useWorktreeProcesses';
 import {
   LaunchWorktreeCommandResponse,
@@ -14,10 +16,13 @@ import {
   WorktreeProcessSummary,
 } from '@/types';
 import { apiUrl } from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 interface WorktreeProcessesProps {
   worktreeId: string | null;
   worktreeName?: string | null;
+  isCollapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }
 
 const STATUS_STYLES: Record<WorktreeProcessStatus, string> = {
@@ -225,7 +230,9 @@ function LogViewer({
 
 export default function WorktreeProcesses({
   worktreeId,
-  worktreeName,
+  worktreeName = null,
+  isCollapsed = false,
+  onToggleCollapsed,
 }: WorktreeProcessesProps) {
   const { processes, isLoading, error, refetch } = useWorktreeProcesses(worktreeId);
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -347,10 +354,17 @@ export default function WorktreeProcesses({
 
   const showLoadingState = isLoading && displayProcesses.length === 0;
   const showEmptyState = !isLoading && displayProcesses.length === 0;
+  const panelId = 'worktree-processes-panel';
+
+  const handleCollapseToggle = useCallback(() => {
+    onToggleCollapsed?.();
+  }, [onToggleCollapsed]);
+
+  let bodyContent: ReactNode;
 
   if (!worktreeId) {
-    return (
-      <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
+    bodyContent = (
+      <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
         <div>
           <p className="font-medium text-foreground">Select a worktree to view running commands</p>
           <p className="mt-2 text-xs text-muted-foreground">
@@ -359,11 +373,9 @@ export default function WorktreeProcesses({
         </div>
       </div>
     );
-  }
-
-  if (error) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+  } else if (error) {
+    bodyContent = (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <div className="text-sm text-red-600">{error}</div>
         <button
           type="button"
@@ -374,118 +386,162 @@ export default function WorktreeProcesses({
         </button>
       </div>
     );
+  } else {
+    bodyContent = (
+      <>
+        {isFormOpen && (
+          <form
+            onSubmit={handleLaunch}
+            className="flex flex-col gap-3 rounded-md border border-dashed border-border bg-muted/40 p-4"
+          >
+            <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">
+              Command
+              <input
+                type="text"
+                value={commandInput}
+                onChange={(event) => setCommandInput(event.target.value)}
+                placeholder="pnpm dev"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                autoFocus
+              />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">
+              Description (optional)
+              <input
+                type="text"
+                value={descriptionInput}
+                onChange={(event) => setDescriptionInput(event.target.value)}
+                placeholder="Launched from dashboard"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </label>
+            {launchError && (
+              <p className="text-xs text-red-600">{launchError}</p>
+            )}
+            <div className="flex items-center gap-2">
+              <button
+                type="submit"
+                className="rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground shadow-sm disabled:opacity-60"
+                disabled={isSubmitting || commandInput.trim().length === 0}
+              >
+                {isSubmitting ? 'Launching…' : 'Launch'}
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelLaunch}
+                className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+                disabled={isSubmitting}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+        {showLoadingState && (
+          <div className="flex flex-1 items-center justify-center px-6">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <div className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-primary" />
+              <span>Loading processes…</span>
+            </div>
+          </div>
+        )}
+
+        {showEmptyState && !showLoadingState && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
+            <div>
+              <p className="font-medium text-foreground">
+                No commands recorded for {worktreeName ?? 'this worktree'} yet
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Launch a command here or run{' '}
+                <code className="rounded bg-muted px-1 py-0.5">agentdev worktree exec</code> in the terminal to see it listed.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {!showEmptyState && !showLoadingState && displayProcesses.length > 0 && (
+          <div className="space-y-3 pb-4">
+            {displayProcesses.map((process) => (
+              <ProcessCard key={process.id} process={process} />
+            ))}
+          </div>
+        )}
+      </>
+    );
   }
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-y-auto px-6 py-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">
-            Commands for {worktreeName ?? 'selected worktree'}
-          </h3>
-          <p className="text-xs text-muted-foreground">
-            Launch commands directly from the dashboard. Data refreshes automatically every 5 seconds.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleToggleForm}
-            className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-            disabled={commandEndpoint == null}
-          >
-            {isFormOpen ? 'Hide form' : 'Run command'}
-          </button>
-          <button
-            type="button"
-            onClick={() => refetch()}
-            className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-            disabled={isLoading}
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {isFormOpen && (
-        <form
-          onSubmit={handleLaunch}
-          className="flex flex-col gap-3 rounded-md border border-dashed border-border bg-muted/40 p-4"
+    <div
+      className={cn(
+        'flex h-full flex-col transition-[padding] duration-200 ease-in-out',
+        isCollapsed ? 'gap-2 px-4 py-2' : 'gap-3 px-6 py-4',
+      )}
+    >
+      <div
+        className={cn(
+          'flex items-center gap-2',
+          isCollapsed ? 'justify-between' : 'flex-wrap justify-between',
+        )}
+      >
+        <button
+          type="button"
+          onClick={handleCollapseToggle}
+          aria-controls={panelId}
+          aria-expanded={!isCollapsed}
+          className="flex min-w-0 flex-1 flex-col items-start gap-1 rounded-md border border-transparent bg-transparent text-left text-sm font-semibold text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
-          <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">
-            Command
-            <input
-              type="text"
-              value={commandInput}
-              onChange={(event) => setCommandInput(event.target.value)}
-              placeholder="pnpm dev"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              autoFocus
+          <span className="flex w-full items-center gap-2">
+            <ChevronDown
+              className={cn(
+                'h-4 w-4 shrink-0 transition-transform duration-200',
+                !isCollapsed ? '-rotate-180' : 'rotate-0',
+              )}
+              aria-hidden="true"
             />
-          </label>
-          <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">
-            Description (optional)
-            <input
-              type="text"
-              value={descriptionInput}
-              onChange={(event) => setDescriptionInput(event.target.value)}
-              placeholder="Launched from dashboard"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
-            />
-          </label>
-          {launchError && (
-            <p className="text-xs text-red-600">{launchError}</p>
-          )}
+            <span className="truncate">
+              Commands for {worktreeName ?? 'selected worktree'}
+            </span>
+          </span>
+          {!isCollapsed ? (
+            <span className="text-xs font-normal text-muted-foreground">
+              Launch commands directly from the dashboard. Data refreshes automatically every 5 seconds.
+            </span>
+          ) : null}
+        </button>
+        {!isCollapsed ? (
           <div className="flex items-center gap-2">
             <button
-              type="submit"
-              className="rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground shadow-sm disabled:opacity-60"
-              disabled={isSubmitting || commandInput.trim().length === 0}
+              type="button"
+              onClick={handleToggleForm}
+              className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+              disabled={commandEndpoint == null}
             >
-              {isSubmitting ? 'Launching…' : 'Launch'}
+              {isFormOpen ? 'Hide form' : 'Run command'}
             </button>
             <button
               type="button"
-              onClick={handleCancelLaunch}
+              onClick={() => refetch()}
               className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-              disabled={isSubmitting}
+              disabled={isLoading}
             >
-              Cancel
+              Refresh
             </button>
           </div>
-        </form>
-      )}
+        ) : null}
+      </div>
 
-      {showLoadingState && (
-        <div className="flex flex-1 items-center justify-center px-6">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <div className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-primary" />
-            <span>Loading processes…</span>
-          </div>
-        </div>
-      )}
-
-      {showEmptyState && !showLoadingState && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
-          <div>
-            <p className="font-medium text-foreground">
-              No commands recorded for {worktreeName ?? 'this worktree'} yet
-            </p>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Launch a command here or run{' '}
-              <code className="rounded bg-muted px-1 py-0.5">agentdev worktree exec</code> in the terminal to see it listed.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {!showEmptyState && !showLoadingState && displayProcesses.length > 0 && (
-        <div className="space-y-3 pb-4">
-          {displayProcesses.map((process) => (
-            <ProcessCard key={process.id} process={process} />
-          ))}
-        </div>
-      )}
+      <div
+        id={panelId}
+        className={cn(
+          'flex-1',
+          isCollapsed ? 'hidden' : 'flex flex-col gap-3 overflow-y-auto',
+        )}
+        aria-hidden={isCollapsed}
+      >
+        {bodyContent}
+      </div>
     </div>
   );
 }

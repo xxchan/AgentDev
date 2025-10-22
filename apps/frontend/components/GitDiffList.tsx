@@ -1,6 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ComponentPropsWithoutRef,
+  RefObject,
+  forwardRef,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { DiffModeEnum } from '@git-diff-view/react';
 import clsx from 'clsx';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
@@ -78,6 +87,7 @@ export interface GitDiffListEntry {
 interface GitDiffListProps {
   entries: GitDiffListEntry[];
   emptyMessage?: string;
+  scrollContainerRef?: RefObject<HTMLElement>;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -98,12 +108,29 @@ function formatStatusLabel(label?: string | null) {
   return label.slice(0, 12);
 }
 
-export default function GitDiffList({ entries, emptyMessage = 'No diff output available.' }: GitDiffListProps) {
+const VirtuosoScroller = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<'div'>>(
+  ({ style, ...props }, ref) => (
+    <div
+      {...props}
+      ref={ref}
+      style={{ ...(style ?? {}), overflowY: 'visible' }}
+    />
+  ),
+);
+VirtuosoScroller.displayName = 'VirtuosoScroller';
+const VirtuosoFooter = () => <div className="h-8" />;
+
+export default function GitDiffList({
+  entries,
+  emptyMessage = 'No diff output available.',
+  scrollContainerRef,
+}: GitDiffListProps) {
   const [mode, setMode] = useState<DiffModeEnum>(() => readStoredDiffMode());
   const [wrap, setWrap] = useState<boolean>(() => readStoredWrapPreference());
   const [query, setQuery] = useState('');
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const headerRef = useRef<HTMLDivElement>(null);
+  const [customScrollParent, setCustomScrollParent] = useState<HTMLElement | null>(null);
 
   const filteredEntries = useMemo(() => {
     if (!query.trim()) return entries;
@@ -214,6 +241,14 @@ export default function GitDiffList({ entries, emptyMessage = 'No diff output av
     setOpenMap((prev) => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
+  useEffect(() => {
+    if (!scrollContainerRef) {
+      setCustomScrollParent(null);
+      return;
+    }
+    setCustomScrollParent(scrollContainerRef.current ?? null);
+  }, [scrollContainerRef]);
+
   const openCount = useMemo(
     () => Object.values(openMap).filter(Boolean).length,
     [openMap],
@@ -288,14 +323,20 @@ export default function GitDiffList({ entries, emptyMessage = 'No diff output av
         </div>
       </div>
 
-      <div className="mt-4 h-[72vh]" data-virt-scroll>
+      <div
+        className={clsx('mt-4', !customScrollParent && 'h-[72vh]')}
+        data-virt-scroll
+      >
         <Virtuoso
           ref={virtuosoRef}
           data={rows}
           overscan={200}
-          components={{
-            Footer: () => <div className="h-8" />,
-          }}
+          customScrollParent={customScrollParent ?? undefined}
+          components={
+            customScrollParent
+              ? { Footer: VirtuosoFooter, Scroller: VirtuosoScroller }
+              : { Footer: VirtuosoFooter }
+          }
           itemContent={(index, item) => {
             if (item.kind === 'group') {
               return (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { RefObject, useEffect, useMemo, useState } from 'react';
 import {
   WorktreeCommitInfo,
   WorktreeCommitsAhead,
@@ -109,6 +109,7 @@ interface WorktreeGitSectionProps {
   commitsAhead?: WorktreeCommitsAhead | null;
   formatTimestamp: (value?: string | null) => string;
   defaultExpanded?: boolean;
+  scrollContainerRef?: RefObject<HTMLElement>;
 }
 
 function formatCommitId(commitId?: string | null) {
@@ -125,6 +126,7 @@ export default function WorktreeGitSection({
   commitsAhead,
   formatTimestamp,
   defaultExpanded = false,
+  scrollContainerRef,
 }: WorktreeGitSectionProps) {
   const [gitDetails, setGitDetails] = useState<WorktreeGitDetails | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
@@ -266,7 +268,7 @@ export default function WorktreeGitSection({
     return result;
   }, [gitDetails, commitDiffSections]);
 
-  const renderCommitStack = () => {
+  const renderGitOverview = () => {
     const commitsAheadList = commitsAhead?.commits ?? [];
     const mergeBaseLabel = commitsAhead?.merge_base
       ? formatCommitId(commitsAhead.merge_base)
@@ -274,82 +276,155 @@ export default function WorktreeGitSection({
     const commitId = commit?.commit_id;
     const headShort = commitId ? formatCommitId(commitId) : null;
     const lastCommitTime = commit?.timestamp ? formatTimestamp(commit.timestamp) : null;
+    const baseBranch = commitsAhead?.base_branch ?? 'default branch';
+
+    const statusItems =
+      status
+        ? [
+            {
+              label: 'Ahead / Behind',
+              value: `↑${status.ahead} / ↓${status.behind}`,
+            },
+            {
+              label: 'Staged',
+              value: status.staged.toString(),
+            },
+            {
+              label: 'Unstaged',
+              value: status.unstaged.toString(),
+            },
+            {
+              label: 'Untracked',
+              value: status.untracked.toString(),
+            },
+            {
+              label: 'Conflicts',
+              value: status.conflicts.toString(),
+            },
+            {
+              label: 'Upstream',
+              value: status.upstream ?? 'origin',
+              monospace: true,
+            },
+          ]
+        : [];
+
+    const metaItems = [
+      mergeBaseLabel
+        ? {
+            label: 'Merge base',
+            value: mergeBaseLabel,
+            title: commitsAhead?.merge_base ?? undefined,
+          }
+        : null,
+      headShort
+        ? {
+            label: 'HEAD',
+            value: headShort,
+            title: commitId ?? undefined,
+          }
+        : null,
+      lastCommitTime
+        ? {
+            label: 'Last update',
+            value: lastCommitTime,
+          }
+        : null,
+    ].filter(Boolean) as Array<{ label: string; value: string; title?: string }>;
 
     return (
-      <section className="rounded-lg border border-gray-200 bg-white px-4 py-4">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
-            Commits vs {commitsAhead?.base_branch ?? 'default branch'}
-          </h3>
-          {commitsAhead && (
-            <span className="text-xs text-gray-400">
-              {commitsAheadList.length}{' '}
-              {commitsAheadList.length === 1 ? 'commit' : 'commits'}
+      <section className="rounded-lg border border-gray-200 bg-white px-4 py-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
+              Git Overview
+            </h3>
+            <p className="text-xs text-gray-500">
+              Comparing to {baseBranch}
+              {commitsAhead ? ` · ${commitsAheadList.length} ${commitsAheadList.length === 1 ? 'commit' : 'commits'} ahead` : ''}
+            </p>
+          </div>
+          {status ? (
+            <span
+              className={`text-xs px-2 py-0.5 rounded-full ${
+                status.is_clean ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-800'
+              }`}
+            >
+              {status.is_clean ? 'Clean' : 'Changes pending'}
             </span>
+          ) : (
+            <span className="text-xs text-gray-400">Status unavailable</span>
           )}
         </div>
 
-        {commitsAhead ? (
-          <>
-            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-500">
-              <span>
-                Merge base:{' '}
-                <span
-                  className="font-mono text-gray-700"
-                  title={commitsAhead.merge_base ?? undefined}
-                >
-                  {mergeBaseLabel}
+        {(statusItems.length > 0 || metaItems.length > 0) && (
+          <div className="mt-3 flex flex-wrap gap-3 text-xs">
+            {statusItems.map((item) => (
+              <div
+                key={item.label}
+                className="flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-gray-600"
+              >
+                <span className="font-semibold text-gray-700">{item.label}:</span>
+                <span className={item.monospace ? 'font-mono text-gray-800' : 'text-gray-700'}>
+                  {item.value}
                 </span>
-              </span>
-              {headShort && (
-                <span>
-                  HEAD:{' '}
-                  <span
-                    className="font-mono text-gray-700"
-                    title={commitId ?? undefined}
-                  >
-                    {headShort}
-                  </span>
+              </div>
+            ))}
+            {metaItems.map((item) => (
+              <div
+                key={item.label}
+                className="flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-gray-600"
+              >
+                <span className="font-semibold text-gray-700">{item.label}:</span>
+                <span className="font-mono text-gray-800" title={item.title}>
+                  {item.value}
                 </span>
-              )}
-              {lastCommitTime && <span>Last update {lastCommitTime}</span>}
-            </div>
+              </div>
+            ))}
+          </div>
+        )}
 
-            {commitsAheadList.length > 0 ? (
-              <ol className="mt-4 space-y-3">
-                {commitsAheadList.map((entry, index) => (
-                  <li
-                    key={entry.commit_id || `${entry.summary}-${index}`}
-                    className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-3"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <span className="font-mono text-sm text-gray-700" title={entry.commit_id}>
-                        {formatCommitId(entry.commit_id)}
-                      </span>
-                      <span className="text-xs text-gray-400">
-                        {entry.timestamp ? formatTimestamp(entry.timestamp) : 'unknown'}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm text-gray-900">
-                      {entry.summary || '(no summary provided)'}
-                    </p>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="mt-4 text-sm text-gray-600">
-                Branch is up to date with {commitsAhead.base_branch}.
-              </p>
-            )}
-          </>
-        ) : (
+        {!commitsAhead && (
           <p className="mt-3 text-sm text-gray-500">
             Unable to determine default branch comparison. Latest commit details shown below.
           </p>
         )}
 
+        {commitsAhead && commitsAheadList.length === 0 && (
+          <p className="mt-3 text-sm text-gray-600">
+            Branch is up to date with {baseBranch}.
+          </p>
+        )}
+
+        {commitsAhead && commitsAheadList.length > 0 && (
+          <div className="mt-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+              Ahead commits
+            </p>
+            <ol className="mt-2 divide-y divide-gray-200 overflow-hidden rounded-md border border-gray-200 bg-gray-50">
+              {commitsAheadList.map((entry, index) => (
+                <li key={entry.commit_id || `${entry.summary}-${index}`} className="px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500">
+                    <span className="font-mono text-sm text-gray-800" title={entry.commit_id}>
+                      {formatCommitId(entry.commit_id)}
+                    </span>
+                    <span>
+                      {entry.timestamp ? formatTimestamp(entry.timestamp) : 'unknown'}
+                    </span>
+                  </div>
+                  {entry.summary ? (
+                    <p className="mt-1 text-sm text-gray-900">{entry.summary}</p>
+                  ) : (
+                    <p className="mt-1 text-sm text-gray-500">(no summary provided)</p>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+
         {commit ? (
-          <div className="mt-5 rounded-lg border border-dashed border-gray-200 bg-white px-3 py-3">
+          <div className="mt-4 rounded-md border border-dashed border-gray-200 bg-gray-50 px-3 py-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
               Latest commit
             </p>
@@ -370,8 +445,8 @@ export default function WorktreeGitSection({
 
   return (
     <div className="space-y-4">
-      {renderCommitStack()}
-      <section className="rounded-lg border border-gray-200 bg-white px-4 py-4">
+      {renderGitOverview()}
+      <section className="rounded-lg border border-gray-200 bg-white px-4 py-4 shadow-sm">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
             Status Summary
@@ -463,7 +538,11 @@ export default function WorktreeGitSection({
               </div>
             ) : gitDetails ? (
               diffEntries.length > 0 ? (
-                <GitDiffList entries={diffEntries} emptyMessage="Working tree matches staged content." />
+                <GitDiffList
+                  entries={diffEntries}
+                  emptyMessage="Working tree matches staged content."
+                  scrollContainerRef={scrollContainerRef}
+                />
               ) : (
                 <div className="rounded-md border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
                   Working tree matches staged content.
