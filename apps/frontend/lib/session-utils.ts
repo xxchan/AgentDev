@@ -1,6 +1,5 @@
 import type {
   BaseSessionSummary,
-  SessionDetailMode,
   SessionDetailResponse,
   SessionEvent,
 } from '@/types';
@@ -12,13 +11,6 @@ export function getSessionKey(
   session: Pick<BaseSessionSummary, 'provider' | 'session_id'>,
 ): string {
   return `${session.provider}-${session.session_id}`;
-}
-
-export function buildDetailCacheKey(
-  sessionKey: string,
-  mode: SessionDetailMode,
-): string {
-  return `${sessionKey}|${mode}`;
 }
 
 export function toSessionListMessages(

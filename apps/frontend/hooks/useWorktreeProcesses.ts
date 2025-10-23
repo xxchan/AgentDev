@@ -1,95 +1,64 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { getJson } from '@/lib/apiClient';
+import { queryKeys } from '@/lib/queryKeys';
+import type {
   WorktreeProcessListResponse,
   WorktreeProcessSummary,
 } from '@/types';
-import { apiUrl } from '@/lib/api';
 
 interface UseWorktreeProcessesOptions {
   pollIntervalMs?: number;
+}
+
+function toErrorMessage(error: unknown): string | null {
+  if (!error) {
+    return null;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
 }
 
 export function useWorktreeProcesses(
   worktreeId: string | null,
   { pollIntervalMs = 5000 }: UseWorktreeProcessesOptions = {},
 ) {
-  const [processes, setProcesses] = useState<WorktreeProcessSummary[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const queryKey = worktreeId
+    ? queryKeys.worktrees.processes(worktreeId)
+    : (['worktrees', 'processes', 'none'] as const);
 
-  const endpoint = useMemo(() => {
-    if (!worktreeId) {
-      return null;
-    }
-    const encoded = encodeURIComponent(worktreeId);
-    return `/api/worktrees/${encoded}/processes`;
-  }, [worktreeId]);
-
-  const fetchProcesses = useCallback(async () => {
-    if (!endpoint) {
-      setProcesses([]);
-      setIsLoading(false);
-      setError(null);
-      return;
-    }
-
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const response = await fetch(apiUrl(endpoint), {
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch processes: ${response.statusText}`);
+  const query = useQuery({
+    queryKey,
+    queryFn: async ({ signal }) => {
+      if (!worktreeId) {
+        return [] as WorktreeProcessSummary[];
       }
+      const response = await getJson<WorktreeProcessListResponse>(
+        `/api/worktrees/${encodeURIComponent(worktreeId)}/processes`,
+        { signal },
+      );
+      return response.processes ?? [];
+    },
+    enabled: Boolean(worktreeId),
+    refetchInterval: worktreeId ? pollIntervalMs : false,
+    refetchOnMount: true,
+  });
 
-      const payload: WorktreeProcessListResponse = await response.json();
-      setProcesses(payload.processes ?? []);
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') {
-        return;
-      }
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      setError(message);
-      setProcesses([]);
-      console.error('Error fetching worktree processes:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [endpoint]);
-
-  useEffect(() => {
-    fetchProcesses();
-
-    if (!endpoint) {
-      return () => undefined;
-    }
-
-    const interval = window.setInterval(fetchProcesses, pollIntervalMs);
-    return () => {
-      window.clearInterval(interval);
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-    };
-  }, [endpoint, fetchProcesses, pollIntervalMs]);
+  const processes = useMemo<WorktreeProcessSummary[]>(
+    () => query.data ?? [],
+    [query.data],
+  );
 
   return {
     processes,
-    isLoading,
-    error,
-    refetch: fetchProcesses,
+    isLoading: query.isLoading && Boolean(worktreeId) && !query.isFetched,
+    isFetching: query.isFetching,
+    error: toErrorMessage(query.error),
+    refetch: query.refetch,
+    query,
   };
 }

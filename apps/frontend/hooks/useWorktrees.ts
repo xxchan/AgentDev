@@ -1,45 +1,42 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { WorktreeListResponse, WorktreeSummary } from '@/types';
-import { apiUrl } from '@/lib/api';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { getJson } from '@/lib/apiClient';
+import { queryKeys } from '@/lib/queryKeys';
+import type { WorktreeListResponse, WorktreeSummary } from '@/types';
+
+function toErrorMessage(error: unknown): string | null {
+  if (!error) {
+    return null;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
 
 export function useWorktrees() {
-  const [worktrees, setWorktrees] = useState<WorktreeSummary[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const query = useQuery({
+    queryKey: queryKeys.worktrees.list,
+    queryFn: ({ signal }) =>
+      getJson<WorktreeListResponse>('/api/worktrees', { signal }).then(
+        (response) => response.worktrees ?? [],
+      ),
+    refetchInterval: 5000,
+  });
 
-  const fetchWorktrees = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const response = await fetch(apiUrl('/api/worktrees'));
-      if (!response.ok) {
-        throw new Error(`Failed to fetch worktrees: ${response.statusText}`);
-      }
-
-      const payload: WorktreeListResponse = await response.json();
-      setWorktrees(payload.worktrees ?? []);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      setError(message);
-      console.error('Error fetching worktrees:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchWorktrees();
-    const interval = setInterval(fetchWorktrees, 5000);
-    return () => clearInterval(interval);
-  }, [fetchWorktrees]);
+  const worktrees = useMemo<WorktreeSummary[]>(
+    () => query.data ?? [],
+    [query.data],
+  );
 
   return {
     worktrees,
-    isLoading,
-    error,
-    refetch: fetchWorktrees,
+    isLoading: query.isLoading && !query.isFetched,
+    isFetching: query.isFetching,
+    error: toErrorMessage(query.error),
+    refetch: query.refetch,
+    query,
   };
 }

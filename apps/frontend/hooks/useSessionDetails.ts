@@ -1,132 +1,111 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { apiUrl } from '@/lib/api';
-import { buildDetailCacheKey, getSessionKey } from '@/lib/session-utils';
+import { useCallback } from 'react';
+import {
+  useQuery,
+  useQueryClient,
+  type UseQueryOptions,
+  type UseQueryResult,
+} from '@tanstack/react-query';
+import { getJson } from '@/lib/apiClient';
+import { queryKeys } from '@/lib/queryKeys';
 import type { SessionDetailMode, SessionDetailResponse } from '@/types';
 
-interface RequestSessionDetailArgs {
+export interface SessionDetailQueryArgs {
   provider: string;
   sessionId: string;
   mode: SessionDetailMode;
-  signal?: AbortSignal;
+}
+
+export interface RequestSessionDetailArgs extends SessionDetailQueryArgs {
   force?: boolean;
 }
 
-type DetailCache = Record<string, SessionDetailResponse>;
-type DetailErrors = Record<string, string>;
-type DetailLoadingMap = Record<string, boolean>;
+function buildSessionDetailPath({ provider, sessionId, mode }: SessionDetailQueryArgs) {
+  return `/api/sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}?mode=${mode}`;
+}
+
+export function sessionDetailQueryOptions(args: SessionDetailQueryArgs) {
+  const { provider, sessionId, mode } = args;
+  return {
+    queryKey: queryKeys.sessions.detail(provider, sessionId, mode),
+    queryFn: ({ signal }) =>
+      getJson<SessionDetailResponse>(buildSessionDetailPath(args), { signal }),
+    staleTime: 30_000,
+  } satisfies UseQueryOptions<
+    SessionDetailResponse,
+    unknown,
+    SessionDetailResponse,
+    ReturnType<typeof queryKeys.sessions.detail>
+  >;
+}
+
+export function useSessionDetailQuery(
+  args: SessionDetailQueryArgs & { enabled?: boolean },
+): UseQueryResult<SessionDetailResponse> {
+  const { enabled = true, ...rest } = args;
+  const options = sessionDetailQueryOptions(rest);
+  return useQuery({
+    ...options,
+    enabled,
+  });
+}
 
 export function useSessionDetails() {
-  const [detailCache, setDetailCache] = useState<DetailCache>({});
-  const [detailErrors, setDetailErrors] = useState<DetailErrors>({});
-  const [loadingMap, setLoadingMap] = useState<DetailLoadingMap>({});
+  const queryClient = useQueryClient();
 
-  const detailCacheRef = useRef(detailCache);
-  const detailErrorsRef = useRef(detailErrors);
-  const loadingMapRef = useRef(loadingMap);
-
-  useEffect(() => {
-    detailCacheRef.current = detailCache;
-  }, [detailCache]);
-
-  useEffect(() => {
-    detailErrorsRef.current = detailErrors;
-  }, [detailErrors]);
-
-  useEffect(() => {
-    loadingMapRef.current = loadingMap;
-  }, [loadingMap]);
-
-  const requestDetail = useCallback(
-    async ({ provider, sessionId, mode, signal, force = false }: RequestSessionDetailArgs) => {
-      const sessionKey = getSessionKey({ provider, session_id: sessionId });
-      const detailKey = buildDetailCacheKey(sessionKey, mode);
-
-      const currentCache = detailCacheRef.current;
-      const currentLoading = loadingMapRef.current;
-
-      if (!force && (currentCache[detailKey] || currentLoading[detailKey])) {
-        return;
-      }
-
-      setLoadingMap((prev) => {
-        const next = { ...prev, [detailKey]: true };
-        loadingMapRef.current = next;
-        return next;
-      });
-      setDetailErrors((prev) => {
-        if (!(detailKey in prev)) {
-          detailErrorsRef.current = prev;
-          return prev;
-        }
-        const next = { ...prev };
-        delete next[detailKey];
-        detailErrorsRef.current = next;
-        return next;
-      });
-
-      try {
-        const response = await fetch(
-          apiUrl(
-            `/api/sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}?mode=${mode}`,
-          ),
-          { signal },
-        );
-
-        if (!response.ok) {
-          throw new Error(`Failed to load session transcript: ${response.statusText}`);
-        }
-
-        const detail: SessionDetailResponse = await response.json();
-        if (signal?.aborted) {
-          return;
-        }
-
-        setDetailCache((prev) => {
-          if (prev[detailKey] === detail) {
-            return prev;
-          }
-          const next = { ...prev, [detailKey]: detail };
-          detailCacheRef.current = next;
-          return next;
-        });
-      } catch (error) {
-        if (signal?.aborted) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        setDetailErrors((prev) => {
-          const next = { ...prev, [detailKey]: message };
-          detailErrorsRef.current = next;
-          return next;
-        });
-        console.error('Failed to load session detail', error);
-      } finally {
-        setLoadingMap((prev) => {
-          if (!(detailKey in prev)) {
-            loadingMapRef.current = prev;
-            return prev;
-          }
-          const next = { ...prev };
-          delete next[detailKey];
-          loadingMapRef.current = next;
-          return next;
-        });
-      }
-    },
-    [],
+  const getDetail = useCallback(
+    ({ provider, sessionId, mode }: SessionDetailQueryArgs) =>
+      queryClient.getQueryData<SessionDetailResponse>(
+        queryKeys.sessions.detail(provider, sessionId, mode),
+      ) ?? null,
+    [queryClient],
   );
 
-  const isLoading = useCallback(
-    (key?: string | null) => Boolean(key && loadingMap[key]),
-    [loadingMap],
+  const getError = useCallback(
+    ({ provider, sessionId, mode }: SessionDetailQueryArgs) => {
+      const state = queryClient.getQueryState<SessionDetailResponse, unknown>(
+        queryKeys.sessions.detail(provider, sessionId, mode),
+      );
+      const error = state?.error;
+      if (!error) {
+        return null;
+      }
+      if (error instanceof Error) {
+        return error.message;
+      }
+      return String(error);
+    },
+    [queryClient],
+  );
+
+  const isFetching = useCallback(
+    ({ provider, sessionId, mode }: SessionDetailQueryArgs) => {
+      const state = queryClient.getQueryState<SessionDetailResponse>(
+        queryKeys.sessions.detail(provider, sessionId, mode),
+      );
+      return state?.fetchStatus === 'fetching';
+    },
+    [queryClient],
+  );
+
+  const requestDetail = useCallback(
+    async ({ provider, sessionId, mode, force = false }: RequestSessionDetailArgs) => {
+      const queryKey = queryKeys.sessions.detail(provider, sessionId, mode);
+      const existing = queryClient.getQueryState<SessionDetailResponse>(queryKey);
+      if (!force && (existing?.data || existing?.fetchStatus === 'fetching')) {
+        return;
+      }
+      await queryClient.fetchQuery(sessionDetailQueryOptions({ provider, sessionId, mode }));
+    },
+    [queryClient],
   );
 
   return {
-    detailCache,
-    detailErrors,
+    getDetail,
+    getError,
     requestDetail,
-    isLoading,
+    isFetching,
+    queryClient,
   };
 }

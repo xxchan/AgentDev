@@ -1,13 +1,15 @@
 'use client';
 
 import { RefObject, useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   WorktreeCommitInfo,
   WorktreeCommitsAhead,
   WorktreeGitDetails,
   WorktreeGitStatus,
 } from '@/types';
-import { apiUrl } from '@/lib/api';
+import { getJson } from '@/lib/apiClient';
+import { queryKeys } from '@/lib/queryKeys';
 import GitDiffList, { GitDiffListEntry } from '@/components/GitDiffList';
 
 type GitDiffSection = {
@@ -119,6 +121,16 @@ function formatCommitId(commitId?: string | null) {
   return commitId.length > 7 ? commitId.slice(0, 7) : commitId;
 }
 
+function toErrorMessage(error: unknown): string | null {
+  if (!error) {
+    return null;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
 export default function WorktreeGitSection({
   worktreeId,
   status,
@@ -128,74 +140,36 @@ export default function WorktreeGitSection({
   defaultExpanded = false,
   scrollContainerRef,
 }: WorktreeGitSectionProps) {
-  const [gitDetails, setGitDetails] = useState<WorktreeGitDetails | null>(null);
-  const [gitError, setGitError] = useState<string | null>(null);
-  const [isGitLoading, setIsGitLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
   useEffect(() => {
-    setGitDetails(null);
-    setGitError(null);
-    setIsGitLoading(false);
     setIsExpanded(defaultExpanded);
-  }, [worktreeId, defaultExpanded]);
+  }, [defaultExpanded, worktreeId]);
 
-  useEffect(() => {
-    setIsExpanded(defaultExpanded);
-  }, [defaultExpanded]);
+  const shouldFetchGitDetails = Boolean(worktreeId) && isExpanded;
+  const gitQueryKey = worktreeId
+    ? queryKeys.worktrees.git(worktreeId)
+    : (['worktrees', 'git', 'none'] as const);
 
-  useEffect(() => {
-    if (!isExpanded || !worktreeId) {
-      return;
-    }
-
-    if (gitDetails) {
-      return;
-    }
-
-    let cancelled = false;
-    const controller = new AbortController();
-    const currentWorktreeId = worktreeId;
-
-    async function loadGitDetails() {
-      setIsGitLoading(true);
-      setGitError(null);
-
-      try {
-        const response = await fetch(
-          apiUrl(`/api/worktrees/${encodeURIComponent(currentWorktreeId)}/git`),
-          { signal: controller.signal },
-        );
-        if (!response.ok) {
-          const message = await response.text();
-          throw new Error(message || `Failed to load git details (${response.status})`);
-        }
-
-        const payload: WorktreeGitDetails = await response.json();
-        if (!cancelled) {
-          setGitDetails(payload);
-        }
-      } catch (err) {
-        if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) {
-          return;
-        }
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        setGitError(message);
-        setGitDetails(null);
-      } finally {
-        if (!cancelled) {
-          setIsGitLoading(false);
-        }
+  const gitQuery = useQuery({
+    queryKey: gitQueryKey,
+    queryFn: ({ signal }) => {
+      if (!worktreeId) {
+        throw new Error('Worktree id is required to load git details');
       }
-    }
 
-    loadGitDetails();
+      return getJson<WorktreeGitDetails>(
+        `/api/worktrees/${encodeURIComponent(worktreeId)}/git`,
+        { signal },
+      );
+    },
+    enabled: shouldFetchGitDetails,
+  });
 
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [worktreeId, isExpanded, gitDetails]);
+  const gitDetails = gitQuery.data ?? null;
+  const gitError = toErrorMessage(gitQuery.error);
+  const isGitLoading =
+    gitQuery.isLoading || (gitQuery.isFetching && !gitQuery.data);
 
   const handleToggle = () => {
     setIsExpanded((prev) => {

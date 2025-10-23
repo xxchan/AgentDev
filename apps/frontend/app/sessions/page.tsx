@@ -21,13 +21,9 @@ import {
   SessionSummary,
 } from '@/types';
 import { cn } from '@/lib/utils';
-import {
-  buildDetailCacheKey,
-  buildUserOnlyMessages,
-  getSessionKey,
-  toSessionListMessages,
-} from '@/lib/session-utils';
+import { buildUserOnlyMessages, getSessionKey, toSessionListMessages } from '@/lib/session-utils';
 import { getProviderBadgeClasses } from '@/lib/providers';
+import { queryKeys } from '@/lib/queryKeys';
 
 type SessionGroupKind = 'all' | 'worktree' | 'directory' | 'unassigned';
 
@@ -923,7 +919,7 @@ export default function SessionsPage() {
   const { sessions, providers, isLoading } = useSessions();
   const [selectedProvider, setSelectedProvider] = useState<string>('all');
   const [detailMode, setDetailMode] = useSessionDetailMode();
-  const { detailCache, detailErrors, requestDetail, isLoading: isDetailLoading } =
+  const { getDetail, getError, requestDetail, isFetching, queryClient } =
     useSessionDetails();
 
   const handleDetailModeChange = useCallback(
@@ -1073,96 +1069,110 @@ export default function SessionsPage() {
     [selectedSessionKey, sessionByKey],
   );
 
-  const baseSessionKey = selectedSession ? getSessionKey(selectedSession) : null;
   const previewTruncated =
     selectedSession !== null ? isPreviewTruncated(selectedSession) : false;
 
-  const fullDetailKey =
-    baseSessionKey !== null ? buildDetailCacheKey(baseSessionKey, 'full') : null;
-  const conversationDetailKey =
-    baseSessionKey !== null ? buildDetailCacheKey(baseSessionKey, 'conversation') : null;
-  const userOnlyDetailKey =
-    baseSessionKey !== null ? buildDetailCacheKey(baseSessionKey, 'user_only') : null;
+  const selectedSessionArgs = selectedSession
+    ? {
+        provider: selectedSession.provider,
+        sessionId: selectedSession.session_id,
+      }
+    : null;
 
-  const fullDetail = fullDetailKey ? detailCache[fullDetailKey] : undefined;
-  const conversationDetail = conversationDetailKey ? detailCache[conversationDetailKey] : undefined;
-  const userOnlyDetail = userOnlyDetailKey ? detailCache[userOnlyDetailKey] : undefined;
+  const fullDetail = selectedSessionArgs
+    ? getDetail({ ...selectedSessionArgs, mode: 'full' })
+    : null;
+  const conversationDetail = selectedSessionArgs
+    ? getDetail({ ...selectedSessionArgs, mode: 'conversation' })
+    : null;
+  const userOnlyDetail = selectedSessionArgs
+    ? getDetail({ ...selectedSessionArgs, mode: 'user_only' })
+    : null;
 
   const detailResponse =
     detailMode === 'full'
       ? fullDetail
       : detailMode === 'conversation'
         ? conversationDetail
-        : userOnlyDetail ?? fullDetail;
+        : userOnlyDetail ?? fullDetail ?? null;
+
+  const fullError = selectedSessionArgs
+    ? getError({ ...selectedSessionArgs, mode: 'full' })
+    : null;
+  const conversationError = selectedSessionArgs
+    ? getError({ ...selectedSessionArgs, mode: 'conversation' })
+    : null;
+  const userOnlyError = selectedSessionArgs
+    ? getError({ ...selectedSessionArgs, mode: 'user_only' }) ?? fullError
+    : null;
 
   const detailError =
     detailMode === 'full'
-      ? (fullDetailKey ? detailErrors[fullDetailKey] : undefined)
+      ? fullError
       : detailMode === 'conversation'
-        ? (conversationDetailKey ? detailErrors[conversationDetailKey] : undefined)
-        : (() => {
-            if (userOnlyDetailKey && detailErrors[userOnlyDetailKey]) {
-              return detailErrors[userOnlyDetailKey];
-            }
-            return fullDetailKey ? detailErrors[fullDetailKey] : undefined;
-          })();
+        ? conversationError
+        : userOnlyError;
 
-  const desiredFetch =
-    selectedSession && baseSessionKey
-      ? (() => {
-          if (detailMode === 'full') {
-            return {
-              key: buildDetailCacheKey(baseSessionKey, 'full'),
-              mode: 'full' as SessionDetailMode,
-            };
-          }
-          if (detailMode === 'conversation') {
-            return {
-              key: buildDetailCacheKey(baseSessionKey, 'conversation'),
-              mode: 'conversation' as SessionDetailMode,
-            };
-          }
-          if (detailMode === 'user_only' && previewTruncated && !fullDetail) {
-            return {
-              key: buildDetailCacheKey(baseSessionKey, 'user_only'),
-              mode: 'user_only' as SessionDetailMode,
-            };
-          }
-          return null;
-        })()
+  const desiredFetchMode =
+    selectedSessionArgs && selectedSession
+      ? detailMode === 'full'
+        ? 'full'
+        : detailMode === 'conversation'
+          ? 'conversation'
+          : previewTruncated && !fullDetail
+            ? 'user_only'
+            : null
       : null;
 
-  const desiredFetchKey = desiredFetch?.key ?? null;
-  const desiredFetchMode = desiredFetch?.mode ?? null;
-  const detailLoading = desiredFetchKey ? isDetailLoading(desiredFetchKey) : false;
+  const detailLoading =
+    selectedSessionArgs && desiredFetchMode
+      ? (() => {
+          const args = { ...selectedSessionArgs, mode: desiredFetchMode };
+          const hasData =
+            desiredFetchMode === 'full'
+              ? fullDetail
+              : desiredFetchMode === 'conversation'
+                ? conversationDetail
+                : userOnlyDetail;
+          return isFetching(args) && !hasData;
+        })()
+      : false;
 
   useEffect(() => {
-    if (!selectedSession || !desiredFetchKey || !desiredFetchMode) {
+    if (!selectedSession || !desiredFetchMode) {
       return;
     }
 
-    if (detailCache[desiredFetchKey]) {
-      return;
-    }
-
-    const controller = new AbortController();
-    requestDetail({
+    const args = {
       provider: selectedSession.provider,
       sessionId: selectedSession.session_id,
       mode: desiredFetchMode,
-      signal: controller.signal,
-    });
+    } as const;
+
+    if (getDetail(args) || isFetching(args)) {
+      return;
+    }
+
+    void requestDetail(args);
 
     return () => {
-      controller.abort();
+      queryClient.cancelQueries({
+        queryKey: queryKeys.sessions.detail(
+          args.provider,
+          args.sessionId,
+          args.mode,
+        ),
+      });
     };
   }, [
-    detailMode,
-    selectedSession,
-    desiredFetchKey,
     desiredFetchMode,
-    detailCache,
+    getDetail,
+    isFetching,
+    queryClient,
     requestDetail,
+    selectedSession,
+    selectedSession?.provider,
+    selectedSession?.session_id,
   ]);
 
   const detailItems = useMemo<SessionListItem[]>(() => {

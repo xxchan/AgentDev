@@ -1,52 +1,52 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { SessionListResponse, SessionProviderSummary, SessionSummary } from '@/types';
-import { apiUrl } from '@/lib/api';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { getJson } from '@/lib/apiClient';
+import { queryKeys } from '@/lib/queryKeys';
+import type {
+  SessionListResponse,
+  SessionProviderSummary,
+  SessionSummary,
+} from '@/types';
+
+function toErrorMessage(error: unknown): string | null {
+  if (!error) {
+    return null;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
 
 export function useSessions() {
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [providers, setProviders] = useState<SessionProviderSummary[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const query = useQuery({
+    queryKey: queryKeys.sessions.list,
+    queryFn: ({ signal }) => getJson<SessionListResponse>('/api/sessions', { signal }),
+    refetchInterval: 5000,
+  });
 
-  const fetchSessions = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
+  const sessionsData = query.data?.sessions;
+  const providersData = query.data?.providers;
 
-    try {
-      const response = await fetch(apiUrl('/api/sessions'));
-      if (!response.ok) {
-        throw new Error(`Failed to fetch sessions: ${response.statusText}`);
-      }
+  const sessions = useMemo<SessionSummary[]>(
+    () => sessionsData ?? [],
+    [sessionsData],
+  );
 
-      const payload: SessionListResponse = await response.json();
-      setSessions(payload.sessions ?? []);
-      if (Array.isArray(payload.providers)) {
-        setProviders(payload.providers);
-      } else {
-        setProviders([]);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      setError(message);
-      console.error('Error fetching sessions:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchSessions();
-    const interval = setInterval(fetchSessions, 5000);
-    return () => clearInterval(interval);
-  }, [fetchSessions]);
+  const providers = useMemo<SessionProviderSummary[]>(
+    () => (Array.isArray(providersData) ? providersData : []),
+    [providersData],
+  );
 
   return {
     sessions,
     providers,
-    isLoading,
-    error,
-    refetch: fetchSessions,
+    isLoading: query.isLoading && !query.isFetched,
+    isFetching: query.isFetching,
+    error: toErrorMessage(query.error),
+    refetch: query.refetch,
+    query,
   };
 }

@@ -20,17 +20,18 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
-## Learn More
+## Data Fetching Architecture
 
-To learn more about Next.js, take a look at the following resources:
+- The UI uses [TanStack React Query](https://tanstack.com/query/latest) for all API access. The query client factory lives in `lib/queryClient.ts`, and the provider is mounted from `app/query-provider.tsx`.
+- Query keys are centralised in `lib/queryKeys.ts` to keep cache boundaries consistent between hooks and components.
+- Use the strongly typed helpers in `lib/apiClient.ts` (`getJson`, `postJson`) so that React Query can propagate abort signals and surface structured errors.
+- Domain hooks such as `useWorktrees`, `useWorktreeProcesses`, `useSessions`, `useSessionDetails`, and `useLaunchWorktreeCommand` wrap React Query primitives with polling intervals, mutations, and cache lookups that match the dashboard UX.
+- When adding new queries, prefer composing existing query keys and helpers to benefit from shared retry/stale-time defaults and predictable invalidation behaviour.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Local Verification
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+After making changes to the frontend:
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Install dependencies with `pnpm install` (from the repository root).
+2. Run `pnpm --filter frontend lint` followed by `pnpm --filter frontend build` to ensure the bundle compiles cleanly.
+3. Start the integrated UI (`pnpm run dev:ui` from the repository root) to exercise worktree views and session transcripts; React Query Devtools are available in development builds for cache inspection.

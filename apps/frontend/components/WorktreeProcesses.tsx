@@ -15,8 +15,8 @@ import {
   WorktreeProcessStatus,
   WorktreeProcessSummary,
 } from '@/types';
-import { apiUrl } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useLaunchWorktreeCommand } from '@/hooks/useLaunchWorktreeCommand';
 
 interface WorktreeProcessesProps {
   worktreeId: string | null;
@@ -239,8 +239,12 @@ export default function WorktreeProcesses({
   const [commandInput, setCommandInput] = useState('');
   const [descriptionInput, setDescriptionInput] = useState('');
   const [launchError, setLaunchError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [optimisticProcesses, setOptimisticProcesses] = useState<WorktreeProcessSummary[]>([]);
+  const {
+    mutateAsync: launchWorktreeCommand,
+    isPending: isSubmitting,
+    reset: resetLaunchCommand,
+  } = useLaunchWorktreeCommand();
 
   useEffect(() => {
     setOptimisticProcesses([]);
@@ -248,7 +252,8 @@ export default function WorktreeProcesses({
     setCommandInput('');
     setDescriptionInput('');
     setLaunchError(null);
-  }, [worktreeId]);
+    resetLaunchCommand();
+  }, [resetLaunchCommand, worktreeId]);
 
   useEffect(() => {
     if (processes.length === 0) {
@@ -259,17 +264,9 @@ export default function WorktreeProcesses({
     );
   }, [processes]);
 
-  const commandEndpoint = useMemo(() => {
-    if (!worktreeId) {
-      return null;
-    }
-    const encoded = encodeURIComponent(worktreeId);
-    return `/api/worktrees/${encoded}/commands`;
-  }, [worktreeId]);
-
   const handleLaunch = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!commandEndpoint) {
+    if (!worktreeId) {
       return;
     }
 
@@ -281,27 +278,14 @@ export default function WorktreeProcesses({
 
     const trimmedDescription = descriptionInput.trim();
 
-    setIsSubmitting(true);
     setLaunchError(null);
 
     try {
-      const response = await fetch(apiUrl(commandEndpoint), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          command: trimmedCommand,
-          description: trimmedDescription ? trimmedDescription : undefined,
-        }),
+      const payload: LaunchWorktreeCommandResponse = await launchWorktreeCommand({
+        worktreeId,
+        command: trimmedCommand,
+        description: trimmedDescription ? trimmedDescription : undefined,
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || `Failed to launch command (status ${response.status})`);
-      }
-
-      const payload: LaunchWorktreeCommandResponse = await response.json();
       setOptimisticProcesses((current) => {
         const withoutDuplicate = current.filter((entry) => entry.id !== payload.process.id);
         return [payload.process, ...withoutDuplicate];
@@ -314,10 +298,8 @@ export default function WorktreeProcesses({
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to launch command';
       setLaunchError(message);
-    } finally {
-      setIsSubmitting(false);
     }
-  }, [commandEndpoint, commandInput, descriptionInput, refetch]);
+  }, [commandInput, descriptionInput, launchWorktreeCommand, refetch, worktreeId]);
 
   const handleCancelLaunch = useCallback(() => {
     setIsFormOpen(false);
@@ -516,7 +498,7 @@ export default function WorktreeProcesses({
               type="button"
               onClick={handleToggleForm}
               className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-              disabled={commandEndpoint == null}
+              disabled={worktreeId == null}
             >
               {isFormOpen ? 'Hide form' : 'Run command'}
             </button>

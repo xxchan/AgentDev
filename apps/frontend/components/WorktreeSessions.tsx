@@ -6,7 +6,6 @@ import SessionListView, { SessionListItem, SessionListMessage } from "@/componen
 import { useSessionDetailMode } from "@/hooks/useSessionDetailMode";
 import { useSessionDetails } from "@/hooks/useSessionDetails";
 import {
-  buildDetailCacheKey,
   buildUserOnlyMessages,
   getSessionKey,
   toSessionListMessages,
@@ -23,8 +22,7 @@ export default function WorktreeSessions({
   formatTimestamp,
 }: WorktreeSessionsProps) {
   const [detailMode, setDetailMode] = useSessionDetailMode();
-  const { detailCache, detailErrors, requestDetail, isLoading: isDetailLoading } =
-    useSessionDetails();
+  const { getDetail, getError, requestDetail, isFetching } = useSessionDetails();
 
   useEffect(() => {
     if (sessions.length === 0 || detailMode === "user_only") {
@@ -32,10 +30,14 @@ export default function WorktreeSessions({
     }
 
     sessions.forEach((session) => {
-      const sessionKey = getSessionKey(session);
       const targetMode = detailMode;
-      const detailKey = buildDetailCacheKey(sessionKey, targetMode);
-      if (detailCache[detailKey]) {
+      const args = {
+        provider: session.provider,
+        sessionId: session.session_id,
+        mode: targetMode,
+      } as const;
+
+      if (getDetail(args) || isFetching(args)) {
         return;
       }
 
@@ -45,18 +47,32 @@ export default function WorktreeSessions({
         mode: targetMode,
       });
     });
-  }, [sessions, detailMode, detailCache, requestDetail]);
+  }, [detailMode, getDetail, isFetching, requestDetail, sessions]);
 
   const sessionItems = useMemo<SessionListItem[]>(() => {
     return sessions.map((session) => {
       const sessionKey = getSessionKey(session);
-      const fullKey = buildDetailCacheKey(sessionKey, "full");
-      const conversationKey = buildDetailCacheKey(sessionKey, "conversation");
-      const userOnlyKey = buildDetailCacheKey(sessionKey, "user_only");
+      const baseArgs = {
+        provider: session.provider,
+        sessionId: session.session_id,
+      } as const;
 
-      const fullDetail = detailCache[fullKey];
-      const conversationDetail = detailCache[conversationKey];
-      const userOnlyDetail = detailCache[userOnlyKey];
+      const fullArgs = { ...baseArgs, mode: "full" } as const;
+      const conversationArgs = { ...baseArgs, mode: "conversation" } as const;
+      const userOnlyArgs = { ...baseArgs, mode: "user_only" } as const;
+
+      const fullDetail = getDetail(fullArgs);
+      const conversationDetail = getDetail(conversationArgs);
+      const userOnlyDetail = getDetail(userOnlyArgs);
+
+      const fullError = getError(fullArgs);
+      const conversationError = getError(conversationArgs);
+      const userOnlyError = getError(userOnlyArgs) ?? fullError;
+
+      const fullFetching = isFetching(fullArgs);
+      const conversationFetching = isFetching(conversationArgs);
+      const userOnlyFetching = isFetching(userOnlyArgs);
+
       const previewTruncated =
         session.user_message_count > session.user_messages_preview.length;
 
@@ -87,21 +103,19 @@ export default function WorktreeSessions({
 
       const detailError =
         detailMode === "full"
-          ? detailErrors[fullKey]
+          ? fullError
           : detailMode === "conversation"
-            ? detailErrors[conversationKey]
-            : detailErrors[userOnlyKey] ?? detailErrors[fullKey];
+            ? conversationError
+            : userOnlyError;
 
-      const loadingKey =
+      const detailLoading =
         detailMode === "full"
-          ? fullKey
+          ? fullFetching && !fullDetail
           : detailMode === "conversation"
-            ? conversationKey
+            ? conversationFetching && !conversationDetail
             : previewTruncated && !fullDetail
-              ? userOnlyKey
-              : null;
-
-      const detailLoading = loadingKey ? isDetailLoading(loadingKey) : false;
+              ? userOnlyFetching
+              : false;
 
       if (detailMode === "user_only") {
         const shownUserMessages = messages.filter(
@@ -121,42 +135,6 @@ export default function WorktreeSessions({
                 label: "Preview",
                 text: `Showing ${shownUserMessages} of ${session.user_message_count} user messages.`,
                 summary_text: "Showing limited user messages",
-                data: null,
-              },
-            },
-          ];
-
-          if (detailMode !== "user_only" && (needsFetch || detailLoading)) {
-            messages = [
-              ...messages,
-              {
-                key: `${sessionKey}-${detailError ? "error" : "loading"}`,
-                detail: {
-                  actor: "system",
-                  category: "session_meta",
-                  label: detailError ? "Error" : "Loading",
-                  text: detailError
-                    ? `Failed to load transcript: ${detailError}`
-                    : "Loading full user transcript…",
-                  summary_text: detailError
-                    ? `Failed to load transcript: ${detailError}`
-                    : "Loading full transcript…",
-                  data: null,
-                },
-              },
-            ];
-          }
-        } else if (detailMode !== "user_only" && detailError && (needsFetch || detailLoading)) {
-          messages = [
-            ...messages,
-            {
-              key: `${sessionKey}-error`,
-              detail: {
-                actor: "system",
-                category: "session_meta",
-                label: "Error",
-                text: `Failed to load transcript: ${detailError}`,
-                summary_text: `Failed to load transcript: ${detailError}`,
                 data: null,
               },
             },
@@ -189,7 +167,7 @@ export default function WorktreeSessions({
               Failed to load transcript: {detailError}
             </div>
           );
-        } else if (needsFetch) {
+        } else if (needsFetch || detailLoading) {
           item.emptyState = (
             <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
               <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary" />
@@ -206,13 +184,7 @@ export default function WorktreeSessions({
 
       return item;
     });
-  }, [
-    sessions,
-    detailMode,
-    detailCache,
-    detailErrors,
-    isDetailLoading,
-  ]);
+  }, [detailMode, getDetail, getError, isFetching, sessions]);
 
   return (
     <SessionListView

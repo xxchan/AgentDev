@@ -3,15 +3,14 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react';
 import clsx from 'clsx';
-import { apiUrl } from '@/lib/api';
 import { WorktreeSummary } from '@/types';
 import WorktreeGitSection from './WorktreeGitSection';
 import WorktreeSessions from './WorktreeSessions';
+import { useLaunchWorktreeCommand } from '@/hooks/useLaunchWorktreeCommand';
 
 interface WorktreeDetailsProps {
   worktree: WorktreeSummary | null;
@@ -60,24 +59,20 @@ export default function WorktreeDetails({
   isLoading,
 }: WorktreeDetailsProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const commandEndpoint = useMemo(() => {
-    if (!worktree) {
-      return null;
-    }
-    return `/api/worktrees/${encodeURIComponent(worktree.id)}/commands`;
-  }, [worktree]);
-
   const [isLaunchingVsCode, setIsLaunchingVsCode] = useState(false);
   const [vsCodeFeedback, setVsCodeFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
   const [activePanel, setActivePanel] = useState<'sessions' | 'git'>('sessions');
+  const { mutateAsync: launchWorktreeCommand, reset: resetLaunchCommand } =
+    useLaunchWorktreeCommand();
 
   useEffect(() => {
     setIsLaunchingVsCode(false);
     setVsCodeFeedback(null);
-  }, [commandEndpoint]);
+    resetLaunchCommand();
+  }, [resetLaunchCommand, worktree?.id]);
 
   useEffect(() => {
     setActivePanel('sessions');
@@ -94,7 +89,8 @@ export default function WorktreeDetails({
   }, [vsCodeFeedback]);
 
   const handleOpenVsCode = useCallback(async () => {
-    if (!commandEndpoint) {
+    const worktreeId = worktree?.id;
+    if (!worktreeId) {
       return;
     }
 
@@ -102,24 +98,11 @@ export default function WorktreeDetails({
     setVsCodeFeedback(null);
 
     try {
-      const response = await fetch(apiUrl(commandEndpoint), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          command: 'code .',
-          description: 'Open worktree in VSCode',
-        }),
+      await launchWorktreeCommand({
+        worktreeId,
+        command: 'code .',
+        description: 'Open worktree in VSCode',
       });
-
-      if (!response.ok) {
-        const message = await response.text();
-        throw new Error(
-          message || `Failed to launch VSCode (status ${response.status})`,
-        );
-      }
-
       setVsCodeFeedback({
         type: 'success',
         message: 'VSCode launch requested. Check Processes for status.',
@@ -134,7 +117,7 @@ export default function WorktreeDetails({
     } finally {
       setIsLaunchingVsCode(false);
     }
-  }, [commandEndpoint]);
+  }, [launchWorktreeCommand, worktree?.id]);
 
   if (!worktree) {
     return (
@@ -251,7 +234,7 @@ export default function WorktreeDetails({
             <button
               type="button"
               onClick={handleOpenVsCode}
-                disabled={!commandEndpoint || isLaunchingVsCode}
+                disabled={!worktree?.id || isLaunchingVsCode}
                 className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 disabled:opacity-60"
               >
                 {isLaunchingVsCode ? 'Opening…' : 'Open in VSCode'}
