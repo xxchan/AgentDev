@@ -27,52 +27,23 @@ export default function WorktreeSessions({
     useSessionDetails();
 
   useEffect(() => {
-    if (sessions.length === 0) {
+    if (sessions.length === 0 || detailMode === "user_only") {
       return;
     }
 
     sessions.forEach((session) => {
       const sessionKey = getSessionKey(session);
-
-      if (detailMode === "full") {
-        const key = buildDetailCacheKey(sessionKey, "full");
-        if (!detailCache[key]) {
-          void requestDetail({
-            provider: session.provider,
-            sessionId: session.session_id,
-            mode: "full",
-          });
-        }
+      const targetMode = detailMode;
+      const detailKey = buildDetailCacheKey(sessionKey, targetMode);
+      if (detailCache[detailKey]) {
         return;
       }
 
-      if (detailMode === "conversation") {
-        const key = buildDetailCacheKey(sessionKey, "conversation");
-        if (!detailCache[key]) {
-          void requestDetail({
-            provider: session.provider,
-            sessionId: session.session_id,
-            mode: "conversation",
-          });
-        }
-        return;
-      }
-
-      const previewTruncated =
-        session.user_message_count > session.user_messages_preview.length;
-      if (!previewTruncated) {
-        return;
-      }
-
-      const userOnlyKey = buildDetailCacheKey(sessionKey, "user_only");
-      const fullKey = buildDetailCacheKey(sessionKey, "full");
-      if (!detailCache[userOnlyKey] && !detailCache[fullKey]) {
-        void requestDetail({
-          provider: session.provider,
-          sessionId: session.session_id,
-          mode: "user_only",
-        });
-      }
+      void requestDetail({
+        provider: session.provider,
+        sessionId: session.session_id,
+        mode: targetMode,
+      });
     });
   }, [sessions, detailMode, detailCache, requestDetail]);
 
@@ -112,7 +83,7 @@ export default function WorktreeSessions({
           ? !fullDetail
           : detailMode === "conversation"
             ? !conversationDetail
-            : previewTruncated && !userOnlyDetail && !fullDetail;
+            : false;
 
       const detailError =
         detailMode === "full"
@@ -155,7 +126,7 @@ export default function WorktreeSessions({
             },
           ];
 
-          if (needsFetch || detailLoading || !userOnlyDetail) {
+          if (detailMode !== "user_only" && (needsFetch || detailLoading)) {
             messages = [
               ...messages,
               {
@@ -175,7 +146,7 @@ export default function WorktreeSessions({
               },
             ];
           }
-        } else if (detailError && (needsFetch || detailLoading)) {
+        } else if (detailMode !== "user_only" && detailError && (needsFetch || detailLoading)) {
           messages = [
             ...messages,
             {
