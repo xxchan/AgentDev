@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiUrl } from '@/lib/api';
 import { buildDetailCacheKey, getSessionKey } from '@/lib/session-utils';
 import type { SessionDetailMode, SessionDetailResponse } from '@/types';
@@ -22,22 +22,47 @@ export function useSessionDetails() {
   const [detailErrors, setDetailErrors] = useState<DetailErrors>({});
   const [loadingMap, setLoadingMap] = useState<DetailLoadingMap>({});
 
+  const detailCacheRef = useRef(detailCache);
+  const detailErrorsRef = useRef(detailErrors);
+  const loadingMapRef = useRef(loadingMap);
+
+  useEffect(() => {
+    detailCacheRef.current = detailCache;
+  }, [detailCache]);
+
+  useEffect(() => {
+    detailErrorsRef.current = detailErrors;
+  }, [detailErrors]);
+
+  useEffect(() => {
+    loadingMapRef.current = loadingMap;
+  }, [loadingMap]);
+
   const requestDetail = useCallback(
     async ({ provider, sessionId, mode, signal, force = false }: RequestSessionDetailArgs) => {
       const sessionKey = getSessionKey({ provider, session_id: sessionId });
       const detailKey = buildDetailCacheKey(sessionKey, mode);
 
-      if (!force && (detailCache[detailKey] || loadingMap[detailKey])) {
+      const currentCache = detailCacheRef.current;
+      const currentLoading = loadingMapRef.current;
+
+      if (!force && (currentCache[detailKey] || currentLoading[detailKey])) {
         return;
       }
 
-      setLoadingMap((prev) => ({ ...prev, [detailKey]: true }));
+      setLoadingMap((prev) => {
+        const next = { ...prev, [detailKey]: true };
+        loadingMapRef.current = next;
+        return next;
+      });
       setDetailErrors((prev) => {
         if (!(detailKey in prev)) {
+          detailErrorsRef.current = prev;
           return prev;
         }
         const next = { ...prev };
         delete next[detailKey];
+        detailErrorsRef.current = next;
         return next;
       });
 
@@ -58,26 +83,39 @@ export function useSessionDetails() {
           return;
         }
 
-        setDetailCache((prev) => ({ ...prev, [detailKey]: detail }));
+        setDetailCache((prev) => {
+          if (prev[detailKey] === detail) {
+            return prev;
+          }
+          const next = { ...prev, [detailKey]: detail };
+          detailCacheRef.current = next;
+          return next;
+        });
       } catch (error) {
         if (signal?.aborted) {
           return;
         }
         const message = error instanceof Error ? error.message : 'Unknown error';
-        setDetailErrors((prev) => ({ ...prev, [detailKey]: message }));
+        setDetailErrors((prev) => {
+          const next = { ...prev, [detailKey]: message };
+          detailErrorsRef.current = next;
+          return next;
+        });
         console.error('Failed to load session detail', error);
       } finally {
         setLoadingMap((prev) => {
           if (!(detailKey in prev)) {
+            loadingMapRef.current = prev;
             return prev;
           }
           const next = { ...prev };
           delete next[detailKey];
+          loadingMapRef.current = next;
           return next;
         });
       }
     },
-    [detailCache, loadingMap],
+    [],
   );
 
   const isLoading = useCallback(
