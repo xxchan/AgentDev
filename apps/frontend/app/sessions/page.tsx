@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, useId, type ChangeEvent } from 'react';
 import { HelpCircle } from 'lucide-react';
 import MainLayout from '@/components/layout/MainLayout';
+import SessionDetailModeToggle from '@/components/SessionDetailModeToggle';
 import SessionListView, { SessionListItem, SessionListMessage } from '@/components/SessionListView';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
@@ -12,15 +13,20 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useSessions } from '@/hooks/useSessions';
+import { useSessionDetailMode } from '@/hooks/useSessionDetailMode';
+import { useSessionDetails } from '@/hooks/useSessionDetails';
 import {
   SessionDetailMode,
-  SessionDetailResponse,
-  SessionEvent,
   SessionProviderSummary,
   SessionSummary,
 } from '@/types';
 import { cn } from '@/lib/utils';
-import { apiUrl } from '@/lib/api';
+import {
+  buildDetailCacheKey,
+  buildUserOnlyMessages,
+  getSessionKey,
+  toSessionListMessages,
+} from '@/lib/session-utils';
 import { getProviderBadgeClasses } from '@/lib/providers';
 
 type SessionGroupKind = 'all' | 'worktree' | 'directory' | 'unassigned';
@@ -104,10 +110,6 @@ function normalizeWorkingDirKey(path: string): string {
   const normalized = trimmed.replace(/\\/g, '/');
   const withoutTrailing = normalized.replace(/\/+$/, '');
   return withoutTrailing || '__root__';
-}
-
-function getSessionKey(session: SessionSummary) {
-  return `${session.provider}-${session.session_id}`;
 }
 
 function buildSessionIndex(sessions: SessionSummary[]): SessionIndex {
@@ -424,52 +426,12 @@ function buildSessionPreview(session: SessionSummary): string {
   return 'No user messages yet';
 }
 
-function toSessionListMessages(
-  events: SessionEvent[],
-  sessionKey: string,
-  scope: string,
-): SessionListMessage[] {
-  return events.map((detail, index) => ({
-    key: `${sessionKey}-${scope}-${index}`,
-    detail,
-  }));
-}
-
-function buildUserOnlyMessages(
-  session: SessionSummary,
-  detail?: SessionDetailResponse | null,
-): SessionListMessage[] {
-  const sessionKey = getSessionKey(session);
-  const previewMessages = getPreviewMessages(session);
-  const baseEvents =
-    detail?.events ??
-    previewMessages.map<SessionEvent>((text) => ({
-      actor: 'user',
-      category: 'user',
-      label: 'User',
-      text,
-      summary_text: text,
-      data: null,
-    }));
-  const events =
-    detail && detail.mode === 'user_only'
-      ? baseEvents
-      : baseEvents.filter((event) => (event.actor ?? '').toLowerCase() === 'user');
-  return toSessionListMessages(events, sessionKey, 'user');
-}
-
-function buildDetailCacheKey(sessionKey: string, mode: SessionDetailMode): string {
-  return `${sessionKey}|${mode}`;
-}
-
 interface ProviderOption {
   value: string;
   label: string;
   count: number;
   latestTimestamp?: string | null;
 }
-
-const DETAIL_MODE_STORAGE_KEY = 'agentdev.sessions.detail-mode';
 
 function buildProviderFallback(sessions: SessionSummary[]): SessionProviderSummary[] {
   const map = new Map<string, SessionProviderSummary>();
@@ -923,43 +885,6 @@ function MessagePreview({ label, content, variant = 'default' }: MessagePreviewP
   );
 }
 
-interface DetailModeToggleProps {
-  value: SessionDetailMode;
-  onChange: (mode: SessionDetailMode) => void;
-}
-
-function DetailModeToggle({ value, onChange }: DetailModeToggleProps) {
-  const options: Array<{ value: SessionDetailMode; label: string }> = [
-    { value: 'user_only', label: 'User turns' },
-    { value: 'conversation', label: 'Conversation' },
-    { value: 'full', label: 'Full transcript' },
-  ];
-
-  return (
-    <div className="flex items-center gap-1 rounded-full border border-border bg-background/60 p-1">
-      {options.map((option) => {
-        const isActive = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            aria-pressed={isActive}
-            onClick={() => onChange(option.value)}
-            className={cn(
-              'rounded-full px-2.5 py-1 text-xs font-medium transition-colors',
-              isActive
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 interface SessionDetailPanelProps {
   selectedSession: SessionSummary | null;
   sessionItems: SessionListItem[];
@@ -988,38 +913,25 @@ function SessionDetailPanel({
       sessions={sessionItems}
       formatTimestamp={formatTimestamp}
       emptyState="No session data."
-      toolbar={<DetailModeToggle value={detailMode} onChange={onDetailModeChange} />}
+      toolbar={
+        <SessionDetailModeToggle value={detailMode} onChange={onDetailModeChange} />
+      }
     />
   );
 }
 export default function SessionsPage() {
   const { sessions, providers, isLoading } = useSessions();
   const [selectedProvider, setSelectedProvider] = useState<string>('all');
-  const [detailMode, setDetailMode] = useState<SessionDetailMode>('user_only');
-  const [detailCache, setDetailCache] = useState<Record<string, SessionDetailResponse>>({});
-  const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
-  const [detailLoadingKey, setDetailLoadingKey] = useState<string | null>(null);
+  const [detailMode, setDetailMode] = useSessionDetailMode();
+  const { detailCache, detailErrors, requestDetail, isLoading: isDetailLoading } =
+    useSessionDetails();
 
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    const stored = window.localStorage.getItem(DETAIL_MODE_STORAGE_KEY);
-    if (stored === 'user_only' || stored === 'conversation' || stored === 'full') {
-      setDetailMode(stored as SessionDetailMode);
-    }
-  }, []);
-
-  const handleDetailModeChange = useCallback((mode: SessionDetailMode) => {
-    setDetailMode(mode);
-    if (typeof window !== 'undefined') {
-      try {
-        window.localStorage.setItem(DETAIL_MODE_STORAGE_KEY, mode);
-      } catch (error) {
-        console.warn('Failed to persist detail mode preference', error);
-      }
-    }
-  }, []);
+  const handleDetailModeChange = useCallback(
+    (mode: SessionDetailMode) => {
+      setDetailMode(mode);
+    },
+    [setDetailMode],
+  );
 
   const providerSummaries = useMemo(() => {
     if (providers.length > 0) {
@@ -1220,13 +1132,12 @@ export default function SessionsPage() {
         })()
       : null;
 
-  const detailLoading = desiredFetch ? detailLoadingKey === desiredFetch.key : false;
   const desiredFetchKey = desiredFetch?.key ?? null;
   const desiredFetchMode = desiredFetch?.mode ?? null;
+  const detailLoading = desiredFetchKey ? isDetailLoading(desiredFetchKey) : false;
 
   useEffect(() => {
     if (!selectedSession || !desiredFetchKey || !desiredFetchMode) {
-      setDetailLoadingKey(null);
       return;
     }
 
@@ -1235,49 +1146,12 @@ export default function SessionsPage() {
     }
 
     const controller = new AbortController();
-    setDetailLoadingKey(desiredFetchKey);
-    setDetailErrors((prev) => {
-      if (!(desiredFetchKey in prev)) {
-        return prev;
-      }
-      const next = { ...prev };
-      delete next[desiredFetchKey];
-      return next;
+    requestDetail({
+      provider: selectedSession.provider,
+      sessionId: selectedSession.session_id,
+      mode: desiredFetchMode,
+      signal: controller.signal,
     });
-
-    const loadDetail = async () => {
-      try {
-        const response = await fetch(
-          apiUrl(
-            `/api/sessions/${encodeURIComponent(selectedSession.provider)}/${encodeURIComponent(selectedSession.session_id)}?mode=${desiredFetchMode}`,
-          ),
-          { signal: controller.signal },
-        );
-        if (!response.ok) {
-          throw new Error(`Failed to load session transcript: ${response.statusText}`);
-        }
-        const detail: SessionDetailResponse = await response.json();
-        if (controller.signal.aborted) {
-          return;
-        }
-        setDetailCache((prev) => ({ ...prev, [desiredFetchKey]: detail }));
-        setDetailLoadingKey((current) =>
-          current === desiredFetchKey ? null : current,
-        );
-      } catch (error) {
-        if (controller.signal.aborted) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        setDetailErrors((prev) => ({ ...prev, [desiredFetchKey]: message }));
-        setDetailLoadingKey((current) =>
-          current === desiredFetchKey ? null : current,
-        );
-        console.error('Failed to load session detail', error);
-      }
-    };
-
-    loadDetail();
 
     return () => {
       controller.abort();
@@ -1288,6 +1162,7 @@ export default function SessionsPage() {
     desiredFetchKey,
     desiredFetchMode,
     detailCache,
+    requestDetail,
   ]);
 
   const detailItems = useMemo<SessionListItem[]>(() => {

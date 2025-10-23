@@ -227,7 +227,7 @@ function formatStructuredValue(value: unknown): string {
   }
   try {
     return JSON.stringify(value, null, 2);
-  } catch (error) {
+  } catch {
     return String(value);
   }
 }
@@ -547,8 +547,7 @@ function parseUserMessage(message: string): ParsedUserMessage {
     const body = tagMatch[2].trim();
 
     if (tag === "user_instructions") {
-      // const derivedTitle = deriveInstructionTitle(body);
-      const derivedTitle = "";
+      const derivedTitle = deriveInstructionTitle(body);
 
       return {
         kind: "special",
