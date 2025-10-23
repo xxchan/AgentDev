@@ -446,59 +446,6 @@ export default function WorktreeGitSection({
   return (
     <div className="space-y-4">
       {renderGitOverview()}
-      <section className="rounded-lg border border-gray-200 bg-white px-4 py-4 shadow-sm">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
-            Status Summary
-          </h3>
-          {status ? (
-            <span
-              className={`text-xs px-2 py-0.5 rounded-full ${
-                status.is_clean ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-800'
-              }`}
-            >
-              {status.is_clean ? 'Clean' : 'Changes pending'}
-            </span>
-          ) : (
-            <span className="text-xs text-gray-400">Unavailable</span>
-          )}
-        </div>
-        {status ? (
-          <dl className="mt-4 grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
-            <div>
-              <dt className="text-gray-500">Ahead / Behind</dt>
-              <dd className="text-gray-900">
-                ↑{status.ahead} / ↓{status.behind}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-gray-500">Staged</dt>
-              <dd className="text-gray-900">{status.staged}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500">Unstaged</dt>
-              <dd className="text-gray-900">{status.unstaged}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500">Untracked</dt>
-              <dd className="text-gray-900">{status.untracked}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500">Conflicts</dt>
-              <dd className="text-gray-900">{status.conflicts}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500">Upstream</dt>
-              <dd className="text-gray-900">{status.upstream ?? 'origin'}</dd>
-            </div>
-          </dl>
-        ) : (
-          <p className="mt-4 text-sm text-gray-500">
-            Unable to fetch git status for this worktree. Check server logs for details.
-          </p>
-        )}
-      </section>
-
       <section className="rounded-lg border border-gray-200 bg-white px-4 py-4">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
