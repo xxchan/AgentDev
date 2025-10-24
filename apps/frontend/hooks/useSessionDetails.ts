@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   useQuery,
   useQueryClient,
@@ -53,6 +53,24 @@ export function useSessionDetailQuery(
 
 export function useSessionDetails() {
   const queryClient = useQueryClient();
+  const [, forceRender] = useState(0);
+
+  useEffect(() => {
+    const cache = queryClient.getQueryCache();
+    const unsubscribe = cache.subscribe((event) => {
+      if (event?.type !== 'queryUpdated') {
+        return;
+      }
+
+      const queryKey = event.query.queryKey;
+      if (Array.isArray(queryKey) && queryKey[0] === 'sessions' && queryKey[1] === 'detail') {
+        // Force consumers to re-render when session detail queries change.
+        forceRender((value) => value + 1);
+      }
+    });
+
+    return unsubscribe;
+  }, [queryClient]);
 
   const getDetail = useCallback(
     ({ provider, sessionId, mode }: SessionDetailQueryArgs) =>
