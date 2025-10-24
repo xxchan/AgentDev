@@ -12,6 +12,13 @@ import {
 import { DiffFile, DiffModeEnum, DiffView } from '@git-diff-view/react';
 import clsx from 'clsx';
 
+import {
+  readStoredDiffMode,
+  readStoredWrapPreference,
+  writeStoredDiffMode,
+  writeStoredWrapPreference,
+} from '@/lib/diffPreferences';
+
 interface GitDiffViewerProps {
   diffText: string;
   filePath?: string;
@@ -111,8 +118,20 @@ const GitDiffViewer = forwardRef<GitDiffViewerHandle, GitDiffViewerProps>(
     ref,
   ) => {
     const hasDiff = diffText.trim().length > 0;
-    const [modeState, setModeState] = useState<DiffModeEnum>(mode ?? DiffModeEnum.SplitGitHub);
-    const [wrapState, setWrapState] = useState<boolean>(wrap ?? false);
+    const isModeControlled = mode !== undefined;
+    const isWrapControlled = wrap !== undefined;
+    const [modeState, setModeState] = useState<DiffModeEnum>(() => {
+      if (isModeControlled) {
+        return mode as DiffModeEnum;
+      }
+      return readStoredDiffMode();
+    });
+    const [wrapState, setWrapState] = useState<boolean>(() => {
+      if (isWrapControlled) {
+        return wrap as boolean;
+      }
+      return readStoredWrapPreference();
+    });
     const diffViewRef = useRef<DiffViewHandle | null>(null);
 
     const parsedPaths = useMemo(() => parseDiffPaths(diffText, filePath), [diffText, filePath]);
@@ -204,6 +223,18 @@ const GitDiffViewer = forwardRef<GitDiffViewerHandle, GitDiffViewerProps>(
         setWrapState(wrap);
       }
     }, [wrap]);
+
+    useEffect(() => {
+      if (mode === undefined) {
+        writeStoredDiffMode(modeState);
+      }
+    }, [mode, modeState]);
+
+    useEffect(() => {
+      if (wrap === undefined) {
+        writeStoredWrapPreference(wrapState);
+      }
+    }, [wrap, wrapState]);
 
     if (!hasDiff || !diffData) {
       return (

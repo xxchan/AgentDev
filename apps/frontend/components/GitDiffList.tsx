@@ -15,57 +15,12 @@ import clsx from 'clsx';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 
 import GitDiffViewer, { GitDiffViewerHandle } from '@/components/GitDiffViewer';
-
-const DIFF_MODE_STORAGE_KEY = 'agentdev.diff.mode';
-const DIFF_WRAP_STORAGE_KEY = 'agentdev.diff.wrap';
-
-function readStoredDiffMode(): DiffModeEnum {
-  if (typeof window === 'undefined') {
-    return DiffModeEnum.SplitGitHub;
-  }
-
-  try {
-    const raw = window.localStorage.getItem(DIFF_MODE_STORAGE_KEY);
-    if (!raw) {
-      return DiffModeEnum.SplitGitHub;
-    }
-
-    const parsed = Number.parseInt(raw, 10);
-    if (Number.isNaN(parsed)) {
-      return DiffModeEnum.SplitGitHub;
-    }
-
-    switch (parsed) {
-      case DiffModeEnum.SplitGitHub:
-      case DiffModeEnum.SplitGitLab:
-      case DiffModeEnum.Split:
-      case DiffModeEnum.Unified:
-        return parsed as DiffModeEnum;
-      default:
-        return DiffModeEnum.SplitGitHub;
-    }
-  } catch (error) {
-    console.warn('Failed to read diff mode preference from localStorage', error);
-    return DiffModeEnum.SplitGitHub;
-  }
-}
-
-function readStoredWrapPreference(): boolean {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-
-  try {
-    const raw = window.localStorage.getItem(DIFF_WRAP_STORAGE_KEY);
-    if (raw === null) {
-      return false;
-    }
-    return raw === 'true';
-  } catch (error) {
-    console.warn('Failed to read diff wrap preference from localStorage', error);
-    return false;
-  }
-}
+import {
+  readStoredDiffMode,
+  readStoredWrapPreference,
+  writeStoredDiffMode,
+  writeStoredWrapPreference,
+} from '@/lib/diffPreferences';
 
 type DiffListRow =
   | { kind: 'group'; key: string; label: string; count: number }
@@ -162,27 +117,11 @@ export default function GitDiffList({
   }, [filteredEntries]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(DIFF_MODE_STORAGE_KEY, mode.toString());
-    } catch (error) {
-      console.warn('Failed to persist diff mode preference to localStorage', error);
-    }
+    writeStoredDiffMode(mode);
   }, [mode]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(DIFF_WRAP_STORAGE_KEY, wrap ? 'true' : 'false');
-    } catch (error) {
-      console.warn('Failed to persist diff wrap preference to localStorage', error);
-    }
+    writeStoredWrapPreference(wrap);
   }, [wrap]);
 
   const rows = useMemo<DiffListRow[]>(() => {
