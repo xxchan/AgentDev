@@ -208,10 +208,7 @@ impl KimiSessionProvider {
         let home = std::env::var("HOME").ok();
 
         let (sessions_dir, workdir_index) = if let Some(home) = home {
-            let base = PathBuf::from(&home)
-                .join(".local")
-                .join("share")
-                .join("kimi");
+            let base = PathBuf::from(&home).join(".kimi");
             let sessions_dir = base.join("sessions");
             let config_path = base.join("kimi.json");
             let workdir_index = Self::load_workdirs(&config_path);
