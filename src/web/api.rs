@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Instant;
+use directories::BaseDirs;
 
 use crate::{
     discovery::{
@@ -164,6 +165,13 @@ pub struct LaunchWorktreeCommandResponse {
 
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct LaunchWorktreeShellRequest {
+    #[serde(default)]
+    pub command: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct LaunchShellRequest {
+    pub path: String,
     #[serde(default)]
     pub command: Option<String>,
 }
@@ -813,7 +821,10 @@ pub async fn get_worktree_discovery(
         if trimmed.is_empty() {
             None
         } else {
-            let path = PathBuf::from(trimmed);
+            let path = match expand_discovery_root(trimmed) {
+                Ok(path) => path,
+                Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+            };
             if !path.exists() {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -853,6 +864,24 @@ pub async fn get_worktree_discovery(
         )
             .into_response(),
     }
+}
+
+fn expand_discovery_root(input: &str) -> Result<PathBuf, String> {
+    if input == "~" {
+        let base_dirs = BaseDirs::new()
+            .ok_or_else(|| "Failed to resolve home directory for ~".to_string())?;
+        return Ok(base_dirs.home_dir().to_path_buf());
+    }
+    if let Some(stripped) = input.strip_prefix("~/") {
+        let base_dirs = BaseDirs::new()
+            .ok_or_else(|| "Failed to resolve home directory for ~".to_string())?;
+        let mut path = base_dirs.home_dir().to_path_buf();
+        if !stripped.is_empty() {
+            path.push(stripped);
+        }
+        return Ok(path);
+    }
+    Ok(PathBuf::from(input))
 }
 
 /// GET /api/worktrees/:id - Get metadata for a specific worktree
@@ -952,6 +981,36 @@ pub async fn post_worktree_shell(
         Ok(Ok(LaunchShellResult::Invalid(message))) => (
             StatusCode::BAD_REQUEST,
             Json(CommandFailurePayload::simple(message)),
+        )
+            .into_response(),
+        Ok(Err(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to launch shell: {err}"),
+        )
+            .into_response(),
+        Err(join_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Shell launch task failed: {join_err}"),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn post_shell(Json(payload): Json<LaunchShellRequest>) -> impl IntoResponse {
+    match tokio::task::spawn_blocking(move || launch_shell_at_path(payload)).await {
+        Ok(Ok(LaunchShellResult::Success)) => (
+            StatusCode::ACCEPTED,
+            Json(LaunchWorktreeShellResponse { status: "launched" }),
+        )
+            .into_response(),
+        Ok(Ok(LaunchShellResult::Invalid(message))) => (
+            StatusCode::BAD_REQUEST,
+            Json(CommandFailurePayload::simple(message)),
+        )
+            .into_response(),
+        Ok(Ok(LaunchShellResult::NotFound)) => (
+            StatusCode::NOT_FOUND,
+            Json(CommandFailurePayload::simple("Directory not found".to_string())),
         )
             .into_response(),
         Ok(Err(err)) => (
@@ -1570,48 +1629,34 @@ fn launch_worktree_shell(
     worktree_id: String,
     request: LaunchWorktreeShellRequest,
 ) -> Result<LaunchShellResult> {
-    if let Some(raw) = request.command.as_ref() {
-        if raw.trim().is_empty() {
-            return Ok(LaunchShellResult::Invalid(
-                "Command is required when provided".to_string(),
-            ));
-        }
-    }
-
     let state = XlaudeState::load()?;
     let Some(info) = state.worktrees.get(&worktree_id) else {
         return Ok(LaunchShellResult::NotFound);
     };
 
-    let command_line = build_terminal_launch_command(info, request.command.as_deref())?;
-    let (program, args) = command_line
-        .split_first()
-        .ok_or_else(|| anyhow!("Terminal command unexpectedly empty"))?;
+    launch_shell_using_path(info.path.as_path(), request.command.as_deref())
+}
 
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|err| anyhow!("Failed to launch terminal via '{program}': {err}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr_trimmed = stderr.trim();
-        let stdout_trimmed = stdout.trim();
-        let message = if !stderr_trimmed.is_empty() {
-            stderr_trimmed.to_string()
-        } else if !stdout_trimmed.is_empty() {
-            stdout_trimmed.to_string()
-        } else {
-            format!(
-                "Terminal command exited with status {}",
-                output.status.code().unwrap_or(-1)
-            )
-        };
-        return Err(anyhow!(message));
+fn launch_shell_at_path(request: LaunchShellRequest) -> Result<LaunchShellResult> {
+    let trimmed_path = request.path.trim();
+    if trimmed_path.is_empty() {
+        return Ok(LaunchShellResult::Invalid(
+            "Directory path is required".to_string(),
+        ));
     }
 
-    Ok(LaunchShellResult::Success)
+    let path = PathBuf::from(trimmed_path);
+    if !path.exists() {
+        return Ok(LaunchShellResult::NotFound);
+    }
+    if !path.is_dir() {
+        return Ok(LaunchShellResult::Invalid(format!(
+            "Path is not a directory: {}",
+            path.display()
+        )));
+    }
+
+    launch_shell_using_path(path.as_path(), request.command.as_deref())
 }
 
 fn launch_worktree_command(
@@ -1687,24 +1732,68 @@ fn launch_worktree_command(
     )))
 }
 
+fn launch_shell_using_path(path: &Path, command: Option<&str>) -> Result<LaunchShellResult> {
+    if let Some(raw) = command {
+        if raw.trim().is_empty() {
+            return Ok(LaunchShellResult::Invalid(
+                "Command is required when provided".to_string(),
+            ));
+        }
+    }
+
+    let command_line = build_terminal_launch_command(path, command)?;
+    execute_terminal_launch(command_line)
+}
+
+fn execute_terminal_launch(command_line: Vec<String>) -> Result<LaunchShellResult> {
+    let (program, args) = command_line
+        .split_first()
+        .ok_or_else(|| anyhow!("Terminal command unexpectedly empty"))?;
+
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|err| anyhow!("Failed to launch terminal via '{program}': {err}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr_trimmed = stderr.trim();
+        let stdout_trimmed = stdout.trim();
+        let message = if !stderr_trimmed.is_empty() {
+            stderr_trimmed.to_string()
+        } else if !stdout_trimmed.is_empty() {
+            stdout_trimmed.to_string()
+        } else {
+            format!(
+                "Terminal command exited with status {}",
+                output.status.code().unwrap_or(-1)
+            )
+        };
+        return Err(anyhow!(message));
+    }
+
+    Ok(LaunchShellResult::Success)
+}
+
 fn build_terminal_launch_command(
-    worktree: &WorktreeInfo,
+    path: &Path,
     command: Option<&str>,
 ) -> Result<Vec<String>> {
     if let Ok(template) = std::env::var("AGENTDEV_TERMINAL_COMMAND") {
         if !template.trim().is_empty() {
-            return build_terminal_command_from_template(worktree, command, &template);
+            return build_terminal_command_from_template(path, command, &template);
         }
     }
-    build_default_terminal_command(worktree, command)
+    build_default_terminal_command(path, command)
 }
 
 fn build_terminal_command_from_template(
-    worktree: &WorktreeInfo,
+    path: &Path,
     command: Option<&str>,
     template: &str,
 ) -> Result<Vec<String>> {
-    let cwd = worktree.path.display().to_string();
+    let cwd = path.display().to_string();
     let command_value = command.unwrap_or("").to_string();
     let command_or_shell = command
         .map(|value| value.to_string())
@@ -1724,12 +1813,12 @@ fn build_terminal_command_from_template(
 }
 
 fn build_default_terminal_command(
-    worktree: &WorktreeInfo,
+    path: &Path,
     command: Option<&str>,
 ) -> Result<Vec<String>> {
     #[cfg(target_os = "macos")]
     {
-        build_macos_terminal_command(worktree, command)
+        build_macos_terminal_command(path, command)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -1743,13 +1832,12 @@ fn build_default_terminal_command(
 
 #[cfg(target_os = "macos")]
 fn build_macos_terminal_command(
-    worktree: &WorktreeInfo,
+    path: &Path,
     command: Option<&str>,
 ) -> Result<Vec<String>> {
-    let path_str = worktree
-        .path
+    let path_str = path
         .to_str()
-        .ok_or_else(|| anyhow!("Worktree path contains invalid UTF-8"))?;
+        .ok_or_else(|| anyhow!("Directory path contains invalid UTF-8"))?;
     let base = format!("cd {} &&", shell_quote(path_str));
     let shell_command = match command {
         Some(cmd) => format!(

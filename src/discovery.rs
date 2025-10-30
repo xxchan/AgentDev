@@ -10,7 +10,6 @@ use crate::state::{WorktreeInfo, XlaudeState};
 use crate::utils::sanitize_branch_name;
 
 pub const MAX_RECURSIVE_DEPTH: usize = 6;
-pub const MAX_REPOS_DISCOVERED: usize = 64;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -184,11 +183,6 @@ fn discover_repositories_recursive(start: &Path) -> Result<Vec<PathBuf>> {
             let key = canonical_string(&dir)?;
             if seen_keys.insert(key.clone()) {
                 repos.push(PathBuf::from(&key));
-                if repos.len() > MAX_REPOS_DISCOVERED {
-                    anyhow::bail!(
-                        "Reached discovery limit of {MAX_REPOS_DISCOVERED} repositories. Narrow your search or raise the limit."
-                    );
-                }
             }
 
             if depth > 0 {

@@ -46,6 +46,16 @@ export default function WorktreesPage() {
   const selectedWorktree: WorktreeSummary | null =
     worktrees.find((tree) => tree.id === selectedWorktreeId) ?? null;
 
+  const handleRunDiscovery = (params: DiscoveryParams) => {
+    setDiscoveryParams(params);
+  };
+
+  const handleRefreshDiscovery = () => {
+    if (discoveryParams) {
+      void refetchDiscovery();
+    }
+  };
+
   return (
     <MainLayout
       sidebar={
@@ -82,12 +92,3 @@ export default function WorktreesPage() {
     />
   );
 }
-  const handleRunDiscovery = (params: DiscoveryParams) => {
-    setDiscoveryParams(params);
-  };
-
-  const handleRefreshDiscovery = () => {
-    if (discoveryParams) {
-      void refetchDiscovery();
-    }
-  };

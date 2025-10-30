@@ -49,6 +49,17 @@ function formatRelativeTime(isoString: string) {
   return timestamp.toLocaleDateString();
 }
 
+function DiscoveryLoadingNotice({ label }: { label: string }) {
+  return (
+    <div className="px-3 py-2 text-xs text-muted-foreground">
+      <div className="flex items-center space-x-2">
+        <div className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-border border-t-primary" />
+        <span>{label}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function WorktreeList({
   worktrees,
   isLoading,
@@ -302,23 +313,32 @@ export default function WorktreeList({
           <div className="px-3 text-xs text-destructive">
             Failed to discover worktrees: {discoveryError}
           </div>
-        ) : isDiscoveryLoading && !hasDiscoveryRun ? (
-          <div className="px-3 py-2 text-sm text-muted-foreground">
-            <div className="flex items-center space-x-2">
-              <div className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-border border-t-primary" />
-              <span>Scanning for unmanaged worktrees…</span>
-            </div>
-          </div>
         ) : !hasDiscoveryRun ? (
-          <div className="px-3 py-2 text-xs text-muted-foreground">
-            No scan has been run yet. Choose a directory and start discovery to surface unmanaged worktrees.
-          </div>
+          isDiscoveryLoading ? (
+            <DiscoveryLoadingNotice label="Scanning for unmanaged worktrees…" />
+          ) : (
+            <div className="px-3 py-2 text-xs text-muted-foreground">
+              No scan has been run yet. Choose a directory and start discovery to surface unmanaged worktrees.
+            </div>
+          )
         ) : discoveredWorktrees.length === 0 ? (
-          <div className="px-3 py-2 text-xs text-muted-foreground">
-            All detected worktrees are already managed.
-          </div>
+          isDiscoveryLoading ? (
+            <DiscoveryLoadingNotice label="Scanning for unmanaged worktrees…" />
+          ) : (
+            <div className="px-3 py-2 text-xs text-muted-foreground">
+              All detected worktrees are already managed.
+            </div>
+          )
         ) : (
           <div className="space-y-2 px-3">
+            {isDiscoveryLoading && (
+              <div className="rounded border border-border bg-muted/40 px-2 py-1 text-[0.65rem] text-muted-foreground">
+                <div className="flex items-center space-x-2">
+                  <div className="inline-block h-3 w-3 animate-spin rounded-full border border-border border-t-primary" />
+                  <span>Refreshing discovery results…</span>
+                </div>
+              </div>
+            )}
             {lastDiscoveryParams?.root && (
               <div className="text-[0.65rem] text-muted-foreground">
                 Last scan root: {lastDiscoveryParams.root}
