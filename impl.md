@@ -10,7 +10,9 @@
     *   基于一个随机生成的任务名（如 `electric-purple-donkey`），创建一个独立的 `git worktree`（如 `electric-purple-donkey-claude`）。
     *   在该 worktree 内，启动一个分离的 `tmux` 会话，并运行对应的 Agent 命令。
     *   通过 `tmux send-keys` 将初始任务指令发送给 Agent，让其开始工作。
-4.  **评估 (Evaluate)**: 用户运行 `agentdev dashboard`，进入一个终端仪表盘。
+> 注：早期版本的终端仪表盘已废弃，现统一使用 Web UI。
+
+4.  **评估 (Evaluate)**: 用户运行 `agentdev ui`，进入一个基于浏览器的仪表盘。
     *   **任务分组**: 仪表盘左侧以“任务”为单位对所有 worktree 进行分组展示，形成一个可折叠的树状列表。
     *   **分层 Diff 预览**: 仪表盘右侧的预览窗格会根据用户的选择动态变化：
         *   **宏观对比**: 当用户选中一个**任务节点**（如 `electric-purple-donkey`）时，预览区会显示一个**合并后**的 `git diff` 视图，将该任务下所有 Agent 产生的代码变更并排展示，方便快速横向比较。

@@ -141,6 +141,8 @@ impl TestContext {
             .file_name()
             .and_then(|n| n.to_str())
             .expect("repo directory missing name");
+        // TODO(agentdev): mirror the runtime worktree root logic once it is configurable
+        // so tests do not assume "../{repo_name}-{name}".
         self.temp_dir.path().join(format!("{repo_name}-{name}"))
     }
 

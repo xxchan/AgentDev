@@ -1705,7 +1705,7 @@ fn launch_worktree_command(
         RegistryProcessStatus::Pending,
     );
 
-    let default_description = "Launched from AgentDev dashboard".to_string();
+    let default_description = "Launched from AgentDev web UI".to_string();
     record.description = request
         .description
         .and_then(|value| {

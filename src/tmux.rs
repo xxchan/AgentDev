@@ -327,7 +327,7 @@ Original tmux error: {err}",
                 .args(["bind-key", "-n", "C-o", &editor_cmd])
                 .output()?;
         }
-        // If no editor configured, don't bind Ctrl+O - user should configure in dashboard
+        // If no editor configured, don't bind Ctrl+O - user should configure it manually
 
         // Configure pane borders for better visual separation
         Command::new("tmux")
@@ -391,7 +391,7 @@ Original tmux error: {err}",
                 "-t",
                 session_name,
                 "status-right",
-                " Ctrl+T: Terminal | Ctrl+O: Editor | Ctrl+Q: Dashboard ",
+                " Ctrl+T: Terminal | Ctrl+O: Editor | Ctrl+Q: Detach ",
             ])
             .output()?;
 
@@ -441,7 +441,7 @@ set -g status on
 set -g status-position top
 set -g status-style "bg=colour238,fg=colour250"
 set -g status-left " 📂 agentdev "
-set -g status-right " Ctrl+T: Terminal | Ctrl+O: Editor | Ctrl+Q: Dashboard "
+set -g status-right " Ctrl+T: Terminal | Ctrl+O: Editor | Ctrl+Q: Detach "
 set -g status-left-length 50
 set -g status-right-length 50
 set -g window-status-current-format ""
@@ -456,7 +456,7 @@ set -g visual-bell off
 set -g visual-silence off
 set -g bell-action none
 
-# Single key to return to dashboard
+# Single key to detach
 bind-key -n C-q detach-client
 
 # Toggle terminal with Ctrl+T (right-side panel)

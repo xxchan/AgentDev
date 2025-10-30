@@ -261,6 +261,8 @@ fn worktrees_for_repo(
         .values()
         .filter_map(|info| {
             let parent = info.path.parent()?;
+            // TODO(agentdev): resolve the repo root via git-common-dir so we do not rely
+            // on sibling naming like "../{repo_name}-{worktree}".
             let repo_path = parent.join(&info.repo_name);
             let repo_path_canon = repo_path.canonicalize().unwrap_or(repo_path.clone());
             if repo_path_canon == repo_canon {
@@ -519,6 +521,8 @@ fn get_main_repo_path(worktree_info: &WorktreeInfo) -> Result<PathBuf> {
     worktree_info
         .path
         .parent()
+        // TODO(agentdev): stop assuming the repo root is parent.join(repo_name); query git
+        // (rev-parse --git-common-dir) so arbitrary worktree directory layouts work.
         .map(|parent| parent.join(&worktree_info.repo_name))
         .context("Failed to resolve main repository path")
 }

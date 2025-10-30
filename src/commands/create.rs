@@ -63,8 +63,8 @@ pub fn handle_create_in_dir_quiet(
     };
 
     // Only check base branch if no repo_path is provided (i.e., running from CLI in current directory)
-    // When called from dashboard with a specific repo_path, we don't need this check
-    // as we'll create the worktree from the default branch
+    // When invoked programmatically (e.g. from the web UI) with a specific repo_path,
+    // we don't need this check as we'll create the worktree from the default branch.
     if repo_path.is_none() {
         let current_branch = exec_git(&["branch", "--show-current"])?;
         let default_branch = exec_git(&["symbolic-ref", "refs/remotes/origin/HEAD"])
@@ -121,6 +121,8 @@ pub fn handle_create_in_dir_quiet(
         );
     }
 
+    // TODO(agentdev): support configurable worktree roots (e.g. repo.worktrees/)
+    // instead of assuming a sibling "../{repo_name}-{worktree_name}" directory.
     // Check if the worktree directory will be created
     let worktree_dir_path = if let Some(ref path) = repo_path {
         path.parent()
@@ -219,6 +221,8 @@ pub fn handle_create_in_dir_quiet(
         }
     }
 
+    // TODO(agentdev): when the worktree root layout changes, update this relative
+    // path along with the directory existence checks above.
     // Create worktree with sanitized directory name
     let worktree_dir = format!("../{repo_name}-{worktree_name}");
     exec_git(&["worktree", "add", &worktree_dir, &branch_name])

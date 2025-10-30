@@ -12,9 +12,6 @@ use agentdev::git::get_repo_name;
 use agentdev::state::XlaudeState;
 use agentdev::tmux::TmuxManager;
 use agentdev::utils::{generate_random_name, sanitize_branch_name};
-use dialoguer::Select;
-
-use crate::commands::handle_dashboard;
 
 /// Generate a random task name using three BIP39 words
 fn generate_task_name() -> Result<String> {
@@ -404,47 +401,10 @@ Install tmux and retry. On macOS: `brew install tmux`. On Ubuntu: `sudo apt-get 
         println!("  - {} / {}", repo_name, wt);
     }
     println!(
-        "{} Use 'agentdev dashboard' to view and compare results",
-        "💡".cyan()
+        "{} Launch the web UI to monitor agents: {}",
+        "💡".cyan(),
+        "agentdev ui".cyan()
     );
-
-    // Post-start: prompt to enter dashboard (yes/no/always)
-    let mut state = XlaudeState::load()?;
-    let non_interactive = std::env::var("XLAUDE_NON_INTERACTIVE").is_ok();
-    let piped = crate::input::is_piped_input();
-
-    if state.auto_open_dashboard_after_start {
-        println!("{} Opening dashboard (always)...", "🖥".green());
-        handle_dashboard()?;
-        return Ok(());
-    }
-
-    if !non_interactive && !piped {
-        let choices = vec!["Yes", "No", "Always"];
-        let sel = Select::new()
-            .with_prompt("Open dashboard now?")
-            .items(&choices)
-            .default(0)
-            .interact()?;
-
-        match sel {
-            0 => {
-                // Yes
-                handle_dashboard()?;
-            }
-            1 => {
-                // No -> nothing to do
-            }
-            2 => {
-                // Always
-                state.auto_open_dashboard_after_start = true;
-                let _ = state.save();
-                println!("{} Opening dashboard (set to always)", "🖥".green());
-                handle_dashboard()?;
-            }
-            _ => {}
-        }
-    }
 
     Ok(())
 }

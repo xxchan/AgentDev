@@ -31,7 +31,7 @@
 示例映射：
 - `agentdev worktree create feature-x`（原 `xlaude create feature-x`）
 - `agentdev worktree open feature-x`（原 `xlaude open feature-x`）
-- `agentdev dashboard`（原 `xlaude dashboard`）
+- `agentdev ui`（原 `xlaude dashboard`）
 
 下文旧文档中的 `xlaude …` 用法在过渡期仍有效，推荐逐步迁移到 `agentdev worktree …`。
 
@@ -130,7 +130,7 @@
 
 ## 全局 Agent 配置
 
-`agent` 字段用于配置启动会话时使用的完整命令行（全局唯一，对 `open` 和 Dashboard 均生效）。
+`agent` 字段用于配置启动会话时使用的完整命令行（全局唯一，对 `open` 和 Web UI 均生效）。
 
 - 若未设置，默认值为 `claude --dangerously-skip-permissions`。
 - 配置示例与参考请直接查看首次运行自动生成的 `~/.config/agentdev/config.toml`，无需在文档中阅读示例格式。

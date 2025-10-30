@@ -103,9 +103,6 @@ enum Commands {
         #[arg(long, default_value = "simple")]
         format: String,
     },
-    /// Launch interactive dashboard for managing Claude sessions
-    #[command(alias = "dash")]
-    Dashboard,
     /// Start a multi-agent task and send an initial prompt
     Start {
         /// Initial task prompt (quoted)
@@ -169,7 +166,6 @@ fn main() -> Result<()> {
         },
         Commands::Completions { shell } => completions::handle_completions(shell),
         Commands::CompleteWorktrees { format } => commands::handle_complete_worktrees(&format),
-        Commands::Dashboard => commands::handle_dashboard(),
         Commands::Start {
             prompt,
             agents,

@@ -28,14 +28,14 @@ agentdev start "研究一下这个项目，把介绍写到一个文件里"
 agentdev start "研究一下这个项目，把介绍写到一个文件里" --agents claude,codex --name research
 ```
 
-- 仪表盘查看与对比（需要 tmux）
+- 启动 Web UI 查看 / 对比所有 agent
 
 ```bash
-agentdev dashboard  # 左侧按任务分组；右侧显示 Initial prompt、分层 diff；q 退出；f 给所有 agent 发送 follow-up prompt
+agentdev ui  # 启动前端 + 后端服务，浏览器访问 http://localhost:3100
 ```
-选中 worktree 后按 Enter attach tmux session，可以继续和 agent 对话，Ctrl+Q 返回。
+Sessions 页面支持对比分支、查看 git diff、发 follow-up prompt。`agentdev start` 会在 tmux 中启动各个 agent，会话仍可通过 `tmux attach` 继续。
 
-- 一键清理整组任务（或者在 dashboard 上用 d 删除）
+- 一键清理整组任务
 
 ```bash
 agentdev delete-task <task>
@@ -45,7 +45,3 @@ agentdev delete-task <task>
 
 - /sessions 页面: 查看本地所有 agent sessions（不依赖）
 - /worktrees 页面: 查看 agentdev 管理的 worktrees 里的 agent sessions / git diff
-
-```bash
-agentdev ui
-```

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
-// Simple in-memory ring buffer for recent git command logs (for dashboard debug view)
+// Simple in-memory ring buffer for recent git command logs (for the web dashboard debug view)
 // Keep this lightweight and dependency-free.
 #[derive(Clone, Debug)]
 pub struct GitLogEntry {

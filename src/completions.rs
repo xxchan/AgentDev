@@ -32,7 +32,7 @@ _agentdev() {{
     fi
 
     # Main commands
-    local commands="worktree dashboard dash start delete-task completions"
+    local commands="worktree sessions start delete-task ui completions"
     local wt_subs="create open delete add rename list clean dir"
 
     # Complete main commands
@@ -83,6 +83,11 @@ _agentdev() {{
                 COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
             fi
             ;;
+        sessions)
+            if [[ $cword -eq 2 ]]; then
+                COMPREPLY=($(compgen -W "list" -- "$cur"))
+            fi
+            ;;
     esac
 }}
 
@@ -99,11 +104,11 @@ _agentdev() {{
     local -a commands
     commands=(
         'worktree:Worktree management commands'
-        'dashboard:Launch interactive dashboard for managing Claude sessions'
-        'dash:Alias for dashboard command'
+        'sessions:Session inspection commands'
         'completions:Generate shell completions'
         'start:Start a multi-agent task and send a prompt'
         'delete-task:Delete all resources for a task'
+        'ui:Launch web UI for agent management'
     )
 
     # Main command completion
@@ -149,6 +154,15 @@ _agentdev() {{
                     fi
                     ;;
             esac
+            ;;
+        sessions)
+            if (( CURRENT == 3 )); then
+                local -a session_subs
+                session_subs=(
+                    'list:List recorded sessions'
+                )
+                _describe 'sessions command' session_subs
+            fi
             ;;
         completions)
             if (( CURRENT == 3 )); then
@@ -208,10 +222,10 @@ complete -c agentdev -f
 
 # Main commands
 complete -c agentdev -n "__fish_use_subcommand" -a worktree -d "Worktree management commands"
-complete -c agentdev -n "__fish_use_subcommand" -a dashboard -d "Launch interactive dashboard"
-complete -c agentdev -n "__fish_use_subcommand" -a dash -d "Alias for dashboard"
+complete -c agentdev -n "__fish_use_subcommand" -a sessions -d "Session inspection commands"
 complete -c agentdev -n "__fish_use_subcommand" -a start -d "Start a multi-agent task"
 complete -c agentdev -n "__fish_use_subcommand" -a delete-task -d "Delete a task"
+complete -c agentdev -n "__fish_use_subcommand" -a ui -d "Launch web UI"
 complete -c agentdev -n "__fish_use_subcommand" -a completions -d "Generate shell completions"
 
 # Function to get worktree completions with repo markers
@@ -236,6 +250,7 @@ end
 # Worktree completions for commands
 complete -c agentdev -n "__fish_seen_subcommand_from worktree; and __fish_seen_subcommand_from open dir delete" -a "(__agentdev_worktrees)"
 complete -c agentdev -n "__fish_seen_subcommand_from worktree; and __fish_seen_subcommand_from rename" -n "not __fish_seen_argument_from (__agentdev_worktrees_simple)" -a "(__agentdev_worktrees)"
+complete -c agentdev -n "__fish_seen_subcommand_from sessions" -a list -d "List recorded sessions"
 
 # Shell completions for completions command
 complete -c agentdev -n "__fish_seen_subcommand_from completions" -a "bash zsh fish"
