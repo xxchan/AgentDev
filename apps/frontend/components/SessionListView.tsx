@@ -526,18 +526,6 @@ function sortEntries(entries: TagEntry[], preferredOrder: string[]) {
   });
 }
 
-function deriveInstructionTitle(body: string): string | null {
-  const docMatch = body.match(/\b([A-Za-z0-9._-]+\.md)\b/);
-  if (docMatch) {
-    return docMatch[1];
-  }
-  const headingMatch = body.match(/^#{1,6}\s+(.+)$/m);
-  if (headingMatch) {
-    return headingMatch[1].trim();
-  }
-  return null;
-}
-
 function parseUserMessage(message: string): ParsedUserMessage {
   const trimmed = message.trim();
   const tagMatch = trimmed.match(/^<([a-z_]+)>([\s\S]*?)<\/\1>\s*$/i);
@@ -547,14 +535,11 @@ function parseUserMessage(message: string): ParsedUserMessage {
     const body = tagMatch[2].trim();
 
     if (tag === "user_instructions") {
-      const derivedTitle = deriveInstructionTitle(body);
-
       return {
         kind: "special",
         message: {
           type: "user_instructions",
           title: "Codex AGENTS.md",
-          headline: derivedTitle ?? undefined,
           collapsible: true,
           defaultCollapsed: true,
           accent: "indigo",
