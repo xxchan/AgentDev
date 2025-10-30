@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import SessionDetailModeToggle from "@/components/SessionDetailModeToggle";
 import SessionListView, { SessionListItem } from "@/components/SessionListView";
+import ResumeCommandButton from "@/features/command/components/ResumeCommandButton";
 import { useSessionDetailMode } from "@/features/sessions/hooks/useSessionDetailMode";
 import { useSessionDetails } from "@/features/sessions/hooks/useSessionDetails";
 import { buildSessionListItem } from "@/features/sessions/utils/buildSessionListItem";
@@ -11,11 +12,13 @@ import { WorktreeSessionSummary } from "@/types";
 interface WorktreeSessionsProps {
   sessions: WorktreeSessionSummary[];
   formatTimestamp: (value?: string | null) => string;
+  worktreeId: string;
 }
 
 export default function WorktreeSessions({
   sessions,
   formatTimestamp,
+  worktreeId,
 }: WorktreeSessionsProps) {
   const [detailMode, setDetailMode] = useSessionDetailMode();
   const { getDetail, getError, requestDetail, isFetching } = useSessionDetails();
@@ -119,14 +122,11 @@ export default function WorktreeSessions({
       previewTruncated,
       showUserOnlyLoading,
       headerActions: (
-        <button
-          type="button"
-          disabled
-          title="Resume session coming soon"
-          className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-400"
-        >
-          Resume (soon)
-        </button>
+        <ResumeCommandButton
+          provider={session.provider}
+          sessionId={session.session_id}
+          worktreeId={worktreeId}
+        />
       ),
     });
   });

@@ -16,7 +16,7 @@ import {
   WorktreeProcessSummary,
 } from '@/types';
 import { cn } from '@/lib/utils';
-import { useLaunchWorktreeCommand } from '@/hooks/useLaunchWorktreeCommand';
+import { useLaunchWorktreeCommand } from '@/features/command/hooks/useLaunchWorktreeCommand';
 
 interface WorktreeProcessesProps {
   worktreeId: string | null;

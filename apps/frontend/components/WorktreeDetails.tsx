@@ -12,8 +12,8 @@ import clsx from 'clsx';
 import type { MergeStrategyOption, WorktreeSummary } from '@/types';
 import WorktreeGitSection from './WorktreeGitSection';
 import WorktreeSessions from './WorktreeSessions';
-import { useLaunchWorktreeCommand } from '@/hooks/useLaunchWorktreeCommand';
-import { useLaunchWorktreeShell } from '@/hooks/useLaunchWorktreeShell';
+import { useLaunchWorktreeCommand } from '@/features/command/hooks/useLaunchWorktreeCommand';
+import { useLaunchWorktreeShell } from '@/features/command/hooks/useLaunchWorktreeShell';
 import { useMergeWorktree } from '@/hooks/useMergeWorktree';
 import { useDeleteWorktree } from '@/hooks/useDeleteWorktree';
 import { ApiError } from '@/lib/apiClient';
@@ -612,6 +612,7 @@ export default function WorktreeDetails({
             <WorktreeSessions
               sessions={worktree.sessions}
               formatTimestamp={formatTimestamp}
+              worktreeId={worktree.id}
             />
           ) : (
             <WorktreeGitSection
