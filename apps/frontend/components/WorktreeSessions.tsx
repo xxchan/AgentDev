@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import SessionDetailModeToggle from "@/components/SessionDetailModeToggle";
 import SessionListView, { SessionListItem, SessionListMessage } from "@/components/SessionListView";
 import { useSessionDetailMode } from "@/hooks/useSessionDetailMode";
@@ -49,142 +49,140 @@ export default function WorktreeSessions({
     });
   }, [detailMode, getDetail, isFetching, requestDetail, sessions]);
 
-  const sessionItems = useMemo<SessionListItem[]>(() => {
-    return sessions.map((session) => {
-      const sessionKey = getSessionKey(session);
-      const baseArgs = {
-        provider: session.provider,
-        sessionId: session.session_id,
-      } as const;
+  const sessionItems: SessionListItem[] = sessions.map((session) => {
+    const sessionKey = getSessionKey(session);
+    const baseArgs = {
+      provider: session.provider,
+      sessionId: session.session_id,
+    } as const;
 
-      const fullArgs = { ...baseArgs, mode: "full" } as const;
-      const conversationArgs = { ...baseArgs, mode: "conversation" } as const;
-      const userOnlyArgs = { ...baseArgs, mode: "user_only" } as const;
+    const fullArgs = { ...baseArgs, mode: "full" } as const;
+    const conversationArgs = { ...baseArgs, mode: "conversation" } as const;
+    const userOnlyArgs = { ...baseArgs, mode: "user_only" } as const;
 
-      const fullDetail = getDetail(fullArgs);
-      const conversationDetail = getDetail(conversationArgs);
-      const userOnlyDetail = getDetail(userOnlyArgs);
+    const fullDetail = getDetail(fullArgs);
+    const conversationDetail = getDetail(conversationArgs);
+    const userOnlyDetail = getDetail(userOnlyArgs);
 
-      const fullError = getError(fullArgs);
-      const conversationError = getError(conversationArgs);
-      const userOnlyError = getError(userOnlyArgs) ?? fullError;
+    const fullError = getError(fullArgs);
+    const conversationError = getError(conversationArgs);
+    const userOnlyError = getError(userOnlyArgs) ?? fullError;
 
-      const fullFetching = isFetching(fullArgs);
-      const conversationFetching = isFetching(conversationArgs);
-      const userOnlyFetching = isFetching(userOnlyArgs);
+    const fullFetching = isFetching(fullArgs);
+    const conversationFetching = isFetching(conversationArgs);
+    const userOnlyFetching = isFetching(userOnlyArgs);
 
-      const previewTruncated =
-        session.user_message_count > session.user_messages_preview.length;
+    const previewTruncated =
+      session.user_message_count > session.user_messages_preview.length;
 
-      const activeDetail =
-        detailMode === "full"
-          ? fullDetail
-          : detailMode === "conversation"
-            ? conversationDetail
-            : userOnlyDetail ?? fullDetail ?? null;
+    const activeDetail =
+      detailMode === "full"
+        ? fullDetail
+        : detailMode === "conversation"
+          ? conversationDetail
+          : userOnlyDetail ?? fullDetail ?? null;
 
-      let messages: SessionListMessage[] =
-        detailMode === "full"
-          ? toSessionListMessages(activeDetail?.events ?? [], sessionKey, "full")
-          : detailMode === "conversation"
-            ? toSessionListMessages(
-                activeDetail?.events ?? [],
-                sessionKey,
-                "conversation",
-              )
-            : buildUserOnlyMessages(session, activeDetail ?? undefined);
+    let messages: SessionListMessage[] =
+      detailMode === "full"
+        ? toSessionListMessages(activeDetail?.events ?? [], sessionKey, "full")
+        : detailMode === "conversation"
+          ? toSessionListMessages(
+              activeDetail?.events ?? [],
+              sessionKey,
+              "conversation",
+            )
+          : buildUserOnlyMessages(session, activeDetail ?? undefined);
 
-      const needsFetch =
-        detailMode === "full"
-          ? !fullDetail
-          : detailMode === "conversation"
-            ? !conversationDetail
+    const needsFetch =
+      detailMode === "full"
+        ? !fullDetail
+        : detailMode === "conversation"
+          ? !conversationDetail
+          : false;
+
+    const detailError =
+      detailMode === "full"
+        ? fullError
+        : detailMode === "conversation"
+          ? conversationError
+          : userOnlyError;
+
+    const detailLoading =
+      detailMode === "full"
+        ? fullFetching && !fullDetail
+        : detailMode === "conversation"
+          ? conversationFetching && !conversationDetail
+          : previewTruncated && !fullDetail
+            ? userOnlyFetching
             : false;
 
-      const detailError =
-        detailMode === "full"
-          ? fullError
-          : detailMode === "conversation"
-            ? conversationError
-            : userOnlyError;
+    if (detailMode === "user_only") {
+      const shownUserMessages = messages.filter(
+        (entry) => (entry.detail.actor ?? "").toLowerCase() === "user",
+      ).length;
+      const isTruncated =
+        previewTruncated && shownUserMessages < session.user_message_count;
 
-      const detailLoading =
-        detailMode === "full"
-          ? fullFetching && !fullDetail
-          : detailMode === "conversation"
-            ? conversationFetching && !conversationDetail
-            : previewTruncated && !fullDetail
-              ? userOnlyFetching
-              : false;
-
-      if (detailMode === "user_only") {
-        const shownUserMessages = messages.filter(
-          (entry) => (entry.detail.actor ?? "").toLowerCase() === "user",
-        ).length;
-        const isTruncated =
-          previewTruncated && shownUserMessages < session.user_message_count;
-
-        if (isTruncated) {
-          messages = [
-            ...messages,
-            {
-              key: `${sessionKey}-preview-note`,
-              detail: {
-                actor: "system",
-                category: "session_meta",
-                label: "Preview",
-                text: `Showing ${shownUserMessages} of ${session.user_message_count} user messages.`,
-                summary_text: "Showing limited user messages",
-                data: null,
-              },
+      if (isTruncated) {
+        messages = [
+          ...messages,
+          {
+            key: `${sessionKey}-preview-note`,
+            detail: {
+              actor: "system",
+              category: "session_meta",
+              label: "Preview",
+              text: `Showing ${shownUserMessages} of ${session.user_message_count} user messages.`,
+              summary_text: "Showing limited user messages",
+              data: null,
             },
-          ];
-        }
+          },
+        ];
       }
+    }
 
-      const item: SessionListItem = {
-        sessionKey,
-        provider: session.provider,
-        sessionId: session.session_id,
-        lastTimestamp: session.last_timestamp,
-        messages,
-        headerActions: (
-          <button
-            type="button"
-            disabled
-            title="Resume session coming soon"
-            className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-400"
-          >
-            Resume (soon)
-          </button>
-        ),
-      };
+    const item: SessionListItem = {
+      sessionKey,
+      provider: session.provider,
+      sessionId: session.session_id,
+      lastTimestamp: session.last_timestamp,
+      messages,
+      headerActions: (
+        <button
+          type="button"
+          disabled
+          title="Resume session coming soon"
+          className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-400"
+        >
+          Resume (soon)
+        </button>
+      ),
+    };
 
-      if (detailMode !== "user_only") {
-        if (detailError) {
-          item.emptyState = (
-            <div className="text-xs text-destructive">
-              Failed to load transcript: {detailError}
-            </div>
-          );
-        } else if (needsFetch || detailLoading) {
-          item.emptyState = (
-            <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary" />
-              Loading transcript…
-            </div>
-          );
-        } else if (messages.length === 0) {
-          item.emptyState =
-            detailMode === "conversation"
-              ? "No conversation messages found."
-              : "No transcript entries found.";
-        }
+    if (detailMode !== "user_only") {
+      if (detailError) {
+        item.emptyState = (
+          <div className="text-xs text-destructive">
+            Failed to load transcript: {detailError}
+          </div>
+        );
+      } else if (needsFetch || detailLoading) {
+        item.emptyState = (
+          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary" />
+            Loading transcript…
+          </div>
+        );
+      } else if (messages.length === 0) {
+        item.emptyState =
+          detailMode === "conversation"
+            ? "No conversation messages found."
+            : "No transcript entries found.";
       }
+    }
 
-      return item;
-    });
-  }, [detailMode, getDetail, getError, isFetching, sessions]);
+    return item;
+  });
 
   return (
     <SessionListView

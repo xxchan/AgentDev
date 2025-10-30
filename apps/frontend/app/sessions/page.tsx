@@ -1189,6 +1189,15 @@ export default function SessionsPage() {
           ? toSessionListMessages(detailResponse?.events ?? [], sessionKey, 'conversation')
           : buildUserOnlyMessages(selectedSession, detailResponse);
 
+    const needsFetch =
+      detailMode === 'full'
+        ? !fullDetail
+        : detailMode === 'conversation'
+          ? !conversationDetail
+          : previewTruncated && !userOnlyDetail && !fullDetail;
+
+    const shouldShowDetailLoading = needsFetch || detailLoading;
+
     if (detailMode === 'user_only') {
       const shownUserMessages = messageItems.filter(
         (item) => (item.detail.actor ?? '').toLowerCase() === 'user',
@@ -1211,22 +1220,7 @@ export default function SessionsPage() {
         ];
       }
 
-      if (detailLoading) {
-        messageItems = [
-          ...messageItems,
-          {
-            key: `${sessionKey}-loading`,
-            detail: {
-              actor: 'system',
-              category: 'session_meta',
-              label: 'Loading',
-              text: 'Loading full user transcript…',
-              summary_text: 'Loading full transcript…',
-              data: null,
-            },
-          },
-        ];
-      } else if (detailError) {
+      if (detailError) {
         messageItems = [
           ...messageItems,
           {
@@ -1237,6 +1231,21 @@ export default function SessionsPage() {
               label: 'Error',
               text: `Failed to load transcript: ${detailError}`,
               summary_text: `Failed to load transcript: ${detailError}`,
+              data: null,
+            },
+          },
+        ];
+      } else if (shouldShowDetailLoading) {
+        messageItems = [
+          ...messageItems,
+          {
+            key: `${sessionKey}-loading`,
+            detail: {
+              actor: 'system',
+              category: 'session_meta',
+              label: 'Loading',
+              text: 'Loading full user transcript…',
+              summary_text: 'Loading full transcript…',
               data: null,
             },
           },
@@ -1273,17 +1282,17 @@ export default function SessionsPage() {
     };
 
     if (detailMode === 'full' || detailMode === 'conversation') {
-      if (detailLoading) {
+      if (detailError) {
+        item.emptyState = (
+          <div className="text-xs text-destructive">
+            Failed to load transcript: {detailError}
+          </div>
+        );
+      } else if (needsFetch || detailLoading) {
         item.emptyState = (
           <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
             <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary" />
             Loading transcript…
-          </div>
-        );
-      } else if (detailError) {
-        item.emptyState = (
-          <div className="text-xs text-destructive">
-            Failed to load transcript: {detailError}
           </div>
         );
       } else if (messageItems.length === 0) {
@@ -1304,6 +1313,9 @@ export default function SessionsPage() {
     detailLoading,
     detailError,
     previewTruncated,
+    fullDetail,
+    conversationDetail,
+    userOnlyDetail,
   ]);
 
   const selectedGroup = groupsById.get(selectedGroupId);
