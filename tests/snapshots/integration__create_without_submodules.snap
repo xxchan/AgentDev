@@ -1,7 +1,8 @@
 ---
 source: tests/integration.rs
+assertion_line: 1283
 expression: redacted
 ---
 ✨ Creating worktree 'no-submodule' with new branch 'no-submodule'...
-✅ Worktree created at: /tmp/TEST_DIR/test-repo-no-submodule
+✅ Worktree created at: /tmp/TEST_DIR/test-repo.worktrees/no-submodule
   💡 To open it, run: agentdev worktree open no-submodule

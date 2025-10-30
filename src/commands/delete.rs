@@ -3,7 +3,9 @@ use colored::Colorize;
 use std::io;
 
 use crate::input::{get_command_arg, smart_confirm};
-use agentdev::git::{execute_git, has_unpushed_commits, is_working_tree_clean};
+use agentdev::git::{
+    execute_git, has_unpushed_commits, is_working_tree_clean, resolve_main_repo_dir,
+};
 use agentdev::state::{WorktreeInfo, XlaudeState};
 use agentdev::tmux::TmuxManager;
 use agentdev::utils::execute_in_dir;
@@ -371,10 +373,5 @@ fn delete_branch(worktree_info: &WorktreeInfo, config: &DeletionConfig) -> Resul
 
 /// Get the path to the main repository from worktree info
 fn get_main_repo_path(worktree_info: &WorktreeInfo) -> Result<std::path::PathBuf> {
-    let parent = worktree_info
-        .path
-        .parent()
-        .context("Failed to get parent directory")?;
-
-    Ok(parent.join(&worktree_info.repo_name))
+    resolve_main_repo_dir(&worktree_info.path)
 }

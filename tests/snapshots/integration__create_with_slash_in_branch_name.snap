@@ -1,7 +1,8 @@
 ---
 source: tests/integration.rs
+assertion_line: 1303
 expression: redacted
 ---
 ✨ Creating worktree 'fix-bug' with new branch 'fix/bug'...
-✅ Worktree created at: /tmp/TEST_DIR/test-repo-fix-bug
+✅ Worktree created at: /tmp/TEST_DIR/test-repo.worktrees/fix-bug
   💡 To open it, run: agentdev worktree open fix-bug

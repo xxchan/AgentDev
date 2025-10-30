@@ -42,7 +42,7 @@
 - 必须在 main/master/develop 分支上执行
 - 如果不提供 name，自动从 BIP39 词库随机选择一个词
 - 创建新分支 `<name>`
-- 创建 worktree 到 `../<repo-name>-<name>` 目录
+- 创建 worktree 到 `../<repo-name>.worktrees/<name>` 目录
 - **不会自动启动 Claude**
 
 ### xlaude open [name]

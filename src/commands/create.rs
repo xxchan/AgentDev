@@ -121,19 +121,18 @@ pub fn handle_create_in_dir_quiet(
         );
     }
 
-    // TODO(agentdev): support configurable worktree roots (e.g. repo.worktrees/)
-    // instead of assuming a sibling "../{repo_name}-{worktree_name}" directory.
-    // Check if the worktree directory will be created
-    let worktree_dir_path = if let Some(ref path) = repo_path {
+    // Compute the base directory for worktrees (../<repo>.worktrees/<name>)
+    let worktree_base_dir = if let Some(ref path) = repo_path {
         path.parent()
-            .unwrap()
-            .join(format!("{repo_name}-{worktree_name}"))
+            .context("Repository path has no parent directory")?
+            .join(format!("{repo_name}.worktrees"))
     } else {
         std::env::current_dir()?
             .parent()
-            .unwrap()
-            .join(format!("{repo_name}-{worktree_name}"))
+            .context("Repository directory has no parent directory")?
+            .join(format!("{repo_name}.worktrees"))
     };
+    let worktree_dir_path = worktree_base_dir.join(&worktree_name);
 
     // Check if the directory already exists
     if worktree_dir_path.exists() {
@@ -221,24 +220,21 @@ pub fn handle_create_in_dir_quiet(
         }
     }
 
-    // TODO(agentdev): when the worktree root layout changes, update this relative
-    // path along with the directory existence checks above.
+    // Ensure the worktree root directory exists before adding the worktree
+    fs::create_dir_all(&worktree_base_dir).with_context(|| {
+        format!(
+            "Failed to create worktree root at {}",
+            worktree_base_dir.display()
+        )
+    })?;
+
     // Create worktree with sanitized directory name
-    let worktree_dir = format!("../{repo_name}-{worktree_name}");
+    let worktree_dir = format!("../{repo_name}.worktrees/{worktree_name}");
     exec_git(&["worktree", "add", &worktree_dir, &branch_name])
         .context("Failed to create worktree")?;
 
     // Get absolute path
-    let worktree_path = if let Some(ref path) = repo_path {
-        path.parent()
-            .unwrap()
-            .join(format!("{repo_name}-{worktree_name}"))
-    } else {
-        std::env::current_dir()?
-            .parent()
-            .unwrap()
-            .join(format!("{repo_name}-{worktree_name}"))
-    };
+    let worktree_path = worktree_dir_path.clone();
 
     // Update submodules if they exist
     if let Err(e) = update_submodules(&worktree_path) {

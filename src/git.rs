@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, TimeZone, Utc};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -494,6 +494,39 @@ pub fn list_worktrees() -> Result<Vec<PathBuf>> {
     }
 
     Ok(worktrees)
+}
+
+/// Resolve the main repository directory for a given worktree.
+/// Uses `git rev-parse --git-common-dir` to avoid relying on path conventions.
+pub fn resolve_main_repo_dir(worktree_path: &Path) -> Result<PathBuf> {
+    let worktree_str = worktree_path
+        .to_str()
+        .context("worktree path contains invalid UTF-8")?;
+
+    let common_dir_output = execute_git(&["-C", worktree_str, "rev-parse", "--git-common-dir"])?;
+    let trimmed = common_dir_output.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!(
+            "git rev-parse --git-common-dir returned an empty path for {}",
+            worktree_path.display()
+        ));
+    }
+
+    let common_dir_path = PathBuf::from(trimmed);
+    let absolute_common = if common_dir_path.is_absolute() {
+        common_dir_path
+    } else {
+        worktree_path.join(common_dir_path)
+    };
+
+    let resolved_common = absolute_common
+        .canonicalize()
+        .unwrap_or_else(|_| absolute_common.clone());
+
+    resolved_common
+        .parent()
+        .map(|p| p.to_path_buf())
+        .context("Failed to resolve main repository directory")
 }
 
 pub fn update_submodules(worktree_path: &Path) -> Result<()> {

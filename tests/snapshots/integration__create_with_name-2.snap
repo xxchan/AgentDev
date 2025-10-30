@@ -1,5 +1,6 @@
 ---
 source: tests/integration.rs
+assertion_line: 270
 expression: state
 ---
 {
@@ -9,7 +10,7 @@ expression: state
       "branch": "feature-x",
       "created_at": "[TIMESTAMP]",
       "name": "feature-x",
-      "path": "/tmp/TEST_DIR/test-repo-feature-x",
+      "path": "/tmp/TEST_DIR/test-repo.worktrees/feature-x",
       "repo_name": "test-repo"
     }
   }

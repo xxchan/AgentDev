@@ -1,8 +1,9 @@
 ---
 source: tests/integration.rs
+assertion_line: 1267
 expression: redacted
 ---
 ✨ Creating worktree 'with-submodule' with new branch 'with-submodule'...
 📦 Updated submodules
-✅ Worktree created at: /tmp/TEST_DIR/test-repo-with-submodule
+✅ Worktree created at: /tmp/TEST_DIR/test-repo.worktrees/with-submodule
   💡 To open it, run: agentdev worktree open with-submodule

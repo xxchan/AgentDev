@@ -3,7 +3,7 @@ use colored::Colorize;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use agentdev::git::list_worktrees;
+use agentdev::git::{list_worktrees, resolve_main_repo_dir};
 use agentdev::state::XlaudeState;
 use agentdev::utils::execute_in_dir;
 
@@ -68,9 +68,7 @@ fn collect_all_worktrees(state: &XlaudeState) -> Result<HashSet<PathBuf>> {
     let repo_paths: HashSet<_> = state
         .worktrees
         .values()
-        // TODO(agentdev): resolve main repo paths via git metadata instead of assuming
-        // parent.join(repo_name) matches the checkout layout.
-        .filter_map(|info| info.path.parent().map(|p| p.join(&info.repo_name)))
+        .filter_map(|info| resolve_main_repo_dir(&info.path).ok())
         .collect();
 
     // Collect worktrees from each repository

@@ -94,7 +94,7 @@ fn test_create_with_piped_input() {
     let worktree_path = std::path::Path::new(&repo_path)
         .parent()
         .unwrap()
-        .join("test-repo-test-feature");
+        .join("test-repo.worktrees/test-feature");
     assert!(worktree_path.exists());
 }
 
@@ -122,7 +122,7 @@ fn test_dir_with_piped_input() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("test-repo-test-dir"));
+        .stdout(predicate::str::contains("test-repo.worktrees/test-dir"));
 }
 
 #[test]
@@ -252,5 +252,5 @@ fn test_pipe_input_priority() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("test-repo-priority-test"));
+        .stdout(predicate::str::contains("test-repo.worktrees/priority-test"));
 }

@@ -141,9 +141,10 @@ impl TestContext {
             .file_name()
             .and_then(|n| n.to_str())
             .expect("repo directory missing name");
-        // TODO(agentdev): mirror the runtime worktree root logic once it is configurable
-        // so tests do not assume "../{repo_name}-{name}".
-        self.temp_dir.path().join(format!("{repo_name}-{name}"))
+        self.temp_dir
+            .path()
+            .join(format!("{repo_name}.worktrees"))
+            .join(name)
     }
 
     fn canonical_worktree_path(&self, name: &str) -> PathBuf {
@@ -674,7 +675,7 @@ fn test_delete_with_changes() {
     ctx.xlaude(&["create", "with-changes"]).assert().success();
 
     // Create uncommitted changes in worktree
-    let worktree_path = ctx.temp_dir.path().join("test-repo-with-changes");
+    let worktree_path = ctx.worktree_path("with-changes");
     fs::write(worktree_path.join("new-file.txt"), "content").unwrap();
 
     // Try to delete, in non-interactive mode it will be cancelled automatically
@@ -697,7 +698,7 @@ fn test_delete_current_worktree() {
     ctx.xlaude(&["create", "current"]).assert().success();
 
     // Switch to the worktree directory
-    let worktree_path = ctx.temp_dir.path().join("test-repo-current");
+    let worktree_path = ctx.worktree_path("current");
 
     // Delete from within the worktree (no name specified)
     let output = ctx
@@ -1017,7 +1018,7 @@ fn test_open_current_worktree_already_managed() {
     ctx.xlaude(&["create", "feature-x"]).assert().success();
 
     // Navigate to the worktree directory
-    let worktree_dir = ctx.temp_dir.path().join("test-repo-feature-x");
+    let worktree_dir = ctx.worktree_path("feature-x");
 
     // Open from within the worktree - should open directly since it's already managed
     ctx.xlaude_in_dir(&worktree_dir, &["open"])
@@ -1175,13 +1176,15 @@ fn test_create_existing_git_worktree() {
     let ctx = TestContext::new("test-repo");
 
     // Create a worktree manually using git (not tracked by xlaude)
+    let manual_root = ctx.temp_dir.path().join("test-repo.worktrees");
+    fs::create_dir_all(&manual_root).unwrap();
     std::process::Command::new("git")
         .args([
             "worktree",
             "add",
             "-b",
             "existing-feature",
-            "../test-repo-existing-feature",
+            "../test-repo.worktrees/existing-feature",
         ])
         .current_dir(&ctx.repo_dir)
         .output()
@@ -1209,7 +1212,8 @@ fn test_create_existing_directory() {
     let ctx = TestContext::new("test-repo");
 
     // Create a directory manually (not a git worktree)
-    let existing_dir = ctx.temp_dir.path().join("test-repo-existing-dir");
+    let existing_dir = ctx.worktree_path("existing-dir");
+    fs::create_dir_all(existing_dir.parent().unwrap()).unwrap();
     fs::create_dir(&existing_dir).unwrap();
     fs::write(existing_dir.join("file.txt"), "existing content").unwrap();
 
@@ -1332,11 +1336,7 @@ fn test_delete_with_slash_in_branch_name() {
     assert!(ctx.worktree_exists("feature-awesome"));
 
     // Delete the worktree from within it
-    let worktree_dir = ctx
-        .repo_dir
-        .parent()
-        .unwrap()
-        .join("test-repo-feature-awesome");
+    let worktree_dir = ctx.worktree_path("feature-awesome");
     let output = ctx
         .xlaude_in_dir(&worktree_dir, &["delete"])
         .assert()

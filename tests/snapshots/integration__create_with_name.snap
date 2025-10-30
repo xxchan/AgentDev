@@ -1,7 +1,8 @@
 ---
 source: tests/integration.rs
+assertion_line: 253
 expression: redacted
 ---
 ✨ Creating worktree 'feature-x' with new branch 'feature-x'...
-✅ Worktree created at: /tmp/TEST_DIR/test-repo-feature-x
+✅ Worktree created at: /tmp/TEST_DIR/test-repo.worktrees/feature-x
   💡 To open it, run: agentdev worktree open feature-x

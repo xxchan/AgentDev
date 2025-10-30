@@ -1,13 +1,14 @@
 ---
 source: tests/integration.rs
+assertion_line: 644
 expression: redacted_stdout
 ---
 📋 Active worktrees:
 
   📦 test-repo
     • feature-a
-      Path: /tmp/TEST_DIR/test-repo-feature-a
+      Path: /tmp/TEST_DIR/test-repo.worktrees/feature-a
       Created: [TIMESTAMP]
     • feature-b
-      Path: /tmp/TEST_DIR/test-repo-feature-b
+      Path: /tmp/TEST_DIR/test-repo.worktrees/feature-b
       Created: [TIMESTAMP]

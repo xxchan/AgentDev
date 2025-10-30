@@ -28,6 +28,8 @@ agentdev start "研究一下这个项目，把介绍写到一个文件里"
 agentdev start "研究一下这个项目，把介绍写到一个文件里" --agents claude,codex --name research
 ```
 
+- 每个 worktree 默认会创建在 `../<repo>.worktrees/<worktree>` 目录下，方便在主仓旁集中管理。
+
 - 启动 Web UI 查看 / 对比所有 agent
 
 ```bash
