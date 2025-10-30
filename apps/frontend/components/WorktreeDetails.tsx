@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  FormEvent,
   useCallback,
   useEffect,
   useId,
@@ -12,6 +13,7 @@ import type { MergeStrategyOption, WorktreeSummary } from '@/types';
 import WorktreeGitSection from './WorktreeGitSection';
 import WorktreeSessions from './WorktreeSessions';
 import { useLaunchWorktreeCommand } from '@/hooks/useLaunchWorktreeCommand';
+import { useLaunchWorktreeShell } from '@/hooks/useLaunchWorktreeShell';
 import { useMergeWorktree } from '@/hooks/useMergeWorktree';
 import { useDeleteWorktree } from '@/hooks/useDeleteWorktree';
 import { ApiError } from '@/lib/apiClient';
@@ -116,6 +118,9 @@ export default function WorktreeDetails({
 }: WorktreeDetailsProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [isLaunchingVsCode, setIsLaunchingVsCode] = useState(false);
+  const [isRunCommandDialogOpen, setIsRunCommandDialogOpen] = useState(false);
+  const [runCommandInput, setRunCommandInput] = useState('');
+  const [runCommandError, setRunCommandError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<FeedbackMessage | null>(null);
   const [activePanel, setActivePanel] = useState<'sessions' | 'git'>('sessions');
   const [isMergeDialogOpen, setIsMergeDialogOpen] = useState(false);
@@ -128,6 +133,11 @@ export default function WorktreeDetails({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const { mutateAsync: launchWorktreeCommand, reset: resetLaunchCommand } =
     useLaunchWorktreeCommand();
+  const {
+    mutateAsync: launchWorktreeShell,
+    isPending: isLaunchingShell,
+    reset: resetLaunchShell,
+  } = useLaunchWorktreeShell();
   const {
     mutateAsync: mergeWorktree,
     reset: resetMerge,
@@ -146,6 +156,8 @@ export default function WorktreeDetails({
   const deleteDialogTitleId = useId();
   const deleteDialogDescriptionId = useId();
   const deleteForceCheckboxId = useId();
+  const runCommandDialogTitleId = useId();
+  const runCommandDialogDescriptionId = useId();
 
   const hasWorktree = Boolean(worktree?.id);
   const selectedMergeStrategy = MERGE_STRATEGIES.find(
@@ -239,13 +251,18 @@ export default function WorktreeDetails({
 
   useEffect(() => {
     setIsLaunchingVsCode(false);
+    setIsRunCommandDialogOpen(false);
+    setRunCommandInput('');
+    setRunCommandError(null);
     setActionFeedback(null);
     resetLaunchCommand();
+    resetLaunchShell();
     closeMergeDialog();
     closeDeleteDialog();
   }, [
     closeDeleteDialog,
     closeMergeDialog,
+    resetLaunchShell,
     resetLaunchCommand,
     worktree?.id,
   ]);
@@ -295,6 +312,84 @@ export default function WorktreeDetails({
     }
   }, [launchWorktreeCommand, worktree?.id]);
 
+  const summarizeCommand = useCallback((value: string) => {
+    const maxLength = 80;
+    const trimmed = value.trim();
+    if (trimmed.length <= maxLength) {
+      return trimmed;
+    }
+    return `${trimmed.slice(0, maxLength - 1)}…`;
+  }, []);
+
+  const handleOpenShell = useCallback(async () => {
+    const worktreeId = worktree?.id;
+    if (!worktreeId) {
+      return;
+    }
+
+    setActionFeedback(null);
+
+    try {
+      await launchWorktreeShell({
+        worktreeId,
+      });
+      setActionFeedback({
+        type: 'success',
+        message: 'Shell launch requested. Check your terminal.',
+      });
+    } catch (error) {
+      setActionFeedback({
+        type: 'error',
+        message: toActionErrorMessage(error, 'Failed to open shell'),
+      });
+    }
+  }, [launchWorktreeShell, worktree?.id]);
+
+  const openRunCommandDialog = useCallback(() => {
+    if (!worktree?.id) {
+      return;
+    }
+    setRunCommandInput('');
+    setRunCommandError(null);
+    setIsRunCommandDialogOpen(true);
+  }, [worktree?.id]);
+
+  const closeRunCommandDialog = useCallback(() => {
+    setIsRunCommandDialogOpen(false);
+    setRunCommandError(null);
+    setRunCommandInput('');
+  }, []);
+
+  const handleRunCommandSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!worktree?.id) {
+      return;
+    }
+    const trimmed = runCommandInput.trim();
+    if (!trimmed) {
+      setRunCommandError('Command is required');
+      return;
+    }
+
+    setRunCommandError(null);
+    setActionFeedback(null);
+
+    try {
+      await launchWorktreeShell({
+        worktreeId: worktree.id,
+        command: trimmed,
+      });
+      setActionFeedback({
+        type: 'success',
+        message: `Launching "${summarizeCommand(trimmed)}" in shell.`,
+      });
+      setIsRunCommandDialogOpen(false);
+      setRunCommandInput('');
+    } catch (error) {
+      setRunCommandError(toActionErrorMessage(error, 'Failed to run command in shell'));
+    }
+  }, [launchWorktreeShell, runCommandInput, summarizeCommand, worktree?.id]);
+
   if (!worktree) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -326,6 +421,9 @@ export default function WorktreeDetails({
   const sessionTabLabel = `Sessions (${sessionCount})`;
   const diffTabLabel =
     diffEstimate !== null ? `Git Diff (${diffEstimate})` : 'Git Diff';
+  const openShellLabel =
+    isLaunchingShell && !isRunCommandDialogOpen ? 'Opening shell…' : 'Open shell';
+  const runCommandSubmitLabel = isLaunchingShell ? 'Launching…' : 'Run';
 
   const overviewCards = [
     {
@@ -418,17 +516,17 @@ export default function WorktreeDetails({
                 </button>
                 <button
                   type="button"
-                  disabled
-                  title="Launching shell is coming soon"
-                  className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-400"
+                  onClick={handleOpenShell}
+                  disabled={!hasWorktree || isLaunchingShell}
+                  className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:border-gray-300 hover:text-gray-800 disabled:opacity-60"
                 >
-                  Open shell
+                  {openShellLabel}
                 </button>
                 <button
                   type="button"
-                  disabled
-                  title="Command runner is coming soon"
-                  className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-400"
+                  onClick={openRunCommandDialog}
+                  disabled={!hasWorktree || isLaunchingShell}
+                  className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:border-gray-300 hover:text-gray-800 disabled:opacity-60"
                 >
                   Run command
                 </button>
@@ -529,6 +627,68 @@ export default function WorktreeDetails({
         </div>
         </div>
       </div>
+
+      {isRunCommandDialogOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          onClick={closeRunCommandDialog}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={runCommandDialogTitleId}
+            aria-describedby={runCommandDialogDescriptionId}
+            className="w-full max-w-md rounded-lg border border-gray-200 bg-white shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <form onSubmit={handleRunCommandSubmit} className="space-y-4">
+              <div className="border-b border-gray-200 px-5 py-4">
+                <h3 id={runCommandDialogTitleId} className="text-base font-semibold text-gray-900">
+                  Run command in shell
+                </h3>
+                <p id={runCommandDialogDescriptionId} className="mt-1 text-sm text-gray-500">
+                  The command runs in a new terminal window rooted at this worktree.
+                </p>
+              </div>
+              <div className="flex flex-col gap-4 px-5 pb-5">
+                <label className="flex flex-col gap-2 text-xs font-medium text-gray-600">
+                  Command
+                  <input
+                    type="text"
+                    value={runCommandInput}
+                    onChange={(event) => setRunCommandInput(event.target.value)}
+                    placeholder="pnpm dev"
+                    className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    autoFocus
+                  />
+                </label>
+                {runCommandError && (
+                  <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                    {runCommandError}
+                  </div>
+                )}
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeRunCommandDialog}
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-60"
+                    disabled={isLaunchingShell}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 disabled:opacity-60"
+                    disabled={isLaunchingShell || runCommandInput.trim().length === 0}
+                  >
+                    {runCommandSubmitLabel}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {isMergeDialogOpen && (
         <div

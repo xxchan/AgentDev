@@ -150,6 +150,17 @@ pub struct LaunchWorktreeCommandResponse {
     pub process: WorktreeProcessSummary,
 }
 
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct LaunchWorktreeShellRequest {
+    #[serde(default)]
+    pub command: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct LaunchWorktreeShellResponse {
+    pub status: &'static str,
+}
+
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum MergeStrategyOption {
@@ -218,6 +229,17 @@ struct CommandFailurePayload {
     pub stderr: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+}
+
+impl CommandFailurePayload {
+    fn simple<S: Into<String>>(message: S) -> Self {
+        Self {
+            message: message.into(),
+            stdout: None,
+            stderr: None,
+            exit_code: None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -847,6 +869,40 @@ pub async fn post_worktree_command(
     }
 }
 
+pub async fn post_worktree_shell(
+    AxumPath(worktree_id): AxumPath<String>,
+    Json(payload): Json<LaunchWorktreeShellRequest>,
+) -> impl IntoResponse {
+    let id_for_error = worktree_id.clone();
+    match tokio::task::spawn_blocking(move || launch_worktree_shell(worktree_id, payload)).await {
+        Ok(Ok(LaunchShellResult::Success)) => (
+            StatusCode::ACCEPTED,
+            Json(LaunchWorktreeShellResponse { status: "launched" }),
+        )
+            .into_response(),
+        Ok(Ok(LaunchShellResult::NotFound)) => (
+            StatusCode::NOT_FOUND,
+            format!("Worktree {id_for_error} not found"),
+        )
+            .into_response(),
+        Ok(Ok(LaunchShellResult::Invalid(message))) => (
+            StatusCode::BAD_REQUEST,
+            Json(CommandFailurePayload::simple(message)),
+        )
+            .into_response(),
+        Ok(Err(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to launch shell: {err}"),
+        )
+            .into_response(),
+        Err(join_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Shell launch task failed: {join_err}"),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn post_worktree_merge(
     AxumPath(worktree_id): AxumPath<String>,
     Json(payload): Json<MergeWorktreeRequest>,
@@ -1440,6 +1496,60 @@ enum LaunchCommandResult {
     Invalid(String),
 }
 
+enum LaunchShellResult {
+    Success,
+    NotFound,
+    Invalid(String),
+}
+
+fn launch_worktree_shell(
+    worktree_id: String,
+    request: LaunchWorktreeShellRequest,
+) -> Result<LaunchShellResult> {
+    if let Some(raw) = request.command.as_ref() {
+        if raw.trim().is_empty() {
+            return Ok(LaunchShellResult::Invalid(
+                "Command is required when provided".to_string(),
+            ));
+        }
+    }
+
+    let state = XlaudeState::load()?;
+    let Some(info) = state.worktrees.get(&worktree_id) else {
+        return Ok(LaunchShellResult::NotFound);
+    };
+
+    let command_line = build_terminal_launch_command(info, request.command.as_deref())?;
+    let (program, args) = command_line
+        .split_first()
+        .ok_or_else(|| anyhow!("Terminal command unexpectedly empty"))?;
+
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|err| anyhow!("Failed to launch terminal via '{program}': {err}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr_trimmed = stderr.trim();
+        let stdout_trimmed = stdout.trim();
+        let message = if !stderr_trimmed.is_empty() {
+            stderr_trimmed.to_string()
+        } else if !stdout_trimmed.is_empty() {
+            stdout_trimmed.to_string()
+        } else {
+            format!(
+                "Terminal command exited with status {}",
+                output.status.code().unwrap_or(-1)
+            )
+        };
+        return Err(anyhow!(message));
+    }
+
+    Ok(LaunchShellResult::Success)
+}
+
 fn launch_worktree_command(
     worktree_id: String,
     request: LaunchWorktreeCommandRequest,
@@ -1511,6 +1621,119 @@ fn launch_worktree_command(
     Ok(LaunchCommandResult::Success(process_record_to_summary(
         &record,
     )))
+}
+
+fn build_terminal_launch_command(
+    worktree: &WorktreeInfo,
+    command: Option<&str>,
+) -> Result<Vec<String>> {
+    if let Ok(template) = std::env::var("AGENTDEV_TERMINAL_COMMAND") {
+        if !template.trim().is_empty() {
+            return build_terminal_command_from_template(worktree, command, &template);
+        }
+    }
+    build_default_terminal_command(worktree, command)
+}
+
+fn build_terminal_command_from_template(
+    worktree: &WorktreeInfo,
+    command: Option<&str>,
+    template: &str,
+) -> Result<Vec<String>> {
+    let cwd = worktree.path.display().to_string();
+    let command_value = command.unwrap_or("").to_string();
+    let command_or_shell = command
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| r#"exec "$SHELL" -l"#.to_string());
+    let filled = template
+        .replace("{cwd}", &cwd)
+        .replace("{command_or_shell}", &command_or_shell)
+        .replace("{command}", &command_value);
+    let tokens = shell_words::split(&filled)
+        .map_err(|err| anyhow!("Failed to parse AGENTDEV_TERMINAL_COMMAND: {err}"))?;
+    if tokens.is_empty() {
+        return Err(anyhow!(
+            "AGENTDEV_TERMINAL_COMMAND did not produce a runnable command"
+        ));
+    }
+    Ok(tokens)
+}
+
+fn build_default_terminal_command(
+    worktree: &WorktreeInfo,
+    command: Option<&str>,
+) -> Result<Vec<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        build_macos_terminal_command(worktree, command)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let suggestion = "Set AGENTDEV_TERMINAL_COMMAND to customize terminal launching, e.g. `wezterm start --cwd '{cwd}' -- bash -lc '{command}'`.";
+        Err(anyhow!(
+            "Terminal launch is not implemented for this platform. {suggestion}"
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn build_macos_terminal_command(
+    worktree: &WorktreeInfo,
+    command: Option<&str>,
+) -> Result<Vec<String>> {
+    let path_str = worktree
+        .path
+        .to_str()
+        .ok_or_else(|| anyhow!("Worktree path contains invalid UTF-8"))?;
+    let base = format!("cd {} &&", shell_quote(path_str));
+    let shell_command = match command {
+        Some(cmd) => format!(
+            "{base} {cmd}; exec \"$SHELL\" -l",
+            base = base,
+            cmd = cmd.trim()
+        ),
+        None => format!("{base} exec \"$SHELL\" -l"),
+    };
+    let escaped = escape_applescript_string(&shell_command);
+    let activate = "tell application \"Terminal\" to activate".to_string();
+    let run_command = format!(
+        "tell application \"Terminal\" to do script \"{escaped}\"",
+        escaped = escaped
+    );
+    Ok(vec![
+        "osascript".to_string(),
+        "-e".to_string(),
+        activate,
+        "-e".to_string(),
+        run_command,
+    ])
+}
+
+#[cfg(target_os = "macos")]
+fn escape_applescript_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(target_os = "macos")]
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if !value.contains('\'') {
+        return format!("'{value}'");
+    }
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(ch);
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 fn spawn_command_runner(

@@ -157,6 +157,10 @@ export interface LaunchWorktreeCommandResponse {
   process: WorktreeProcessSummary;
 }
 
+export interface LaunchWorktreeShellResponse {
+  status: 'launched';
+}
+
 export type MergeStrategyOption = 'ff-only' | 'merge' | 'squash';
 
 export interface MergeWorktreeRequest {
