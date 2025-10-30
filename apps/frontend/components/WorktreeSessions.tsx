@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from "react";
 import SessionDetailModeToggle from "@/components/SessionDetailModeToggle";
 import SessionListView, { SessionListItem, SessionListMessage } from "@/components/SessionListView";
+import ResumeCommandButton from "@/components/ResumeCommandButton";
 import { useSessionDetailMode } from "@/hooks/useSessionDetailMode";
 import { useSessionDetails } from "@/hooks/useSessionDetails";
 import {
@@ -149,14 +150,7 @@ export default function WorktreeSessions({
         lastTimestamp: session.last_timestamp,
         messages,
         headerActions: (
-          <button
-            type="button"
-            disabled
-            title="Resume session coming soon"
-            className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-400"
-          >
-            Resume (soon)
-          </button>
+          <ResumeCommandButton provider={session.provider} sessionId={session.session_id} />
         ),
       };
 

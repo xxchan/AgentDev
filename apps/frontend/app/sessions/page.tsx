@@ -5,6 +5,7 @@ import { HelpCircle } from 'lucide-react';
 import MainLayout from '@/components/layout/MainLayout';
 import SessionDetailModeToggle from '@/components/SessionDetailModeToggle';
 import SessionListView, { SessionListItem, SessionListMessage } from '@/components/SessionListView';
+import ResumeCommandButton from '@/components/ResumeCommandButton';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Tooltip,
@@ -1261,14 +1262,10 @@ export default function SessionsPage() {
           </div>
         ) : undefined,
       headerActions: (
-        <button
-          type="button"
-          disabled
-          title="Resume session coming soon"
-          className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-400"
-        >
-          Resume (soon)
-        </button>
+        <ResumeCommandButton
+          provider={selectedSession.provider}
+          sessionId={selectedSession.session_id}
+        />
       ),
     };
 
