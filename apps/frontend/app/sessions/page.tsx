@@ -1265,6 +1265,7 @@ export default function SessionsPage() {
         <ResumeCommandButton
           provider={selectedSession.provider}
           sessionId={selectedSession.session_id}
+          worktreeId={selectedSession.worktree_id ?? undefined}
         />
       ),
     };

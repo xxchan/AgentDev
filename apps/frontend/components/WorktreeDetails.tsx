@@ -612,6 +612,7 @@ export default function WorktreeDetails({
             <WorktreeSessions
               sessions={worktree.sessions}
               formatTimestamp={formatTimestamp}
+              worktreeId={worktree.id}
             />
           ) : (
             <WorktreeGitSection

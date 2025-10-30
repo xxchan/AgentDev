@@ -16,11 +16,13 @@ import { WorktreeSessionSummary } from "@/types";
 interface WorktreeSessionsProps {
   sessions: WorktreeSessionSummary[];
   formatTimestamp: (value?: string | null) => string;
+  worktreeId: string;
 }
 
 export default function WorktreeSessions({
   sessions,
   formatTimestamp,
+  worktreeId,
 }: WorktreeSessionsProps) {
   const [detailMode, setDetailMode] = useSessionDetailMode();
   const { getDetail, getError, requestDetail, isFetching } = useSessionDetails();
@@ -150,7 +152,11 @@ export default function WorktreeSessions({
         lastTimestamp: session.last_timestamp,
         messages,
         headerActions: (
-          <ResumeCommandButton provider={session.provider} sessionId={session.session_id} />
+          <ResumeCommandButton
+            provider={session.provider}
+            sessionId={session.session_id}
+            worktreeId={worktreeId}
+          />
         ),
       };
 
@@ -178,7 +184,7 @@ export default function WorktreeSessions({
 
       return item;
     });
-  }, [detailMode, getDetail, getError, isFetching, sessions]);
+  }, [detailMode, getDetail, getError, isFetching, sessions, worktreeId]);
 
   return (
     <SessionListView

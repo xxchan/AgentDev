@@ -1,16 +1,26 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Check, Copy } from 'lucide-react';
+import { AlertCircle, Check, Copy, Play } from 'lucide-react';
+import { useLaunchWorktreeShell } from '@/hooks/useLaunchWorktreeShell';
+import { ApiError } from '@/lib/apiClient';
 import { cn } from '@/lib/utils';
 
 interface ResumeCommandButtonProps {
   provider: string;
   sessionId: string;
+  worktreeId?: string | null;
   className?: string;
 }
 
-type CopyStatus = 'idle' | 'copied' | 'error';
+type ActionState =
+  | { kind: 'idle' }
+  | { kind: 'copying' }
+  | { kind: 'copy-success' }
+  | { kind: 'copy-error'; message: string }
+  | { kind: 'launching' }
+  | { kind: 'launch-success' }
+  | { kind: 'launch-error'; message: string };
 
 function resolveResumeCommand(provider: string, sessionId: string): string | null {
   const normalized = provider.trim().toLowerCase();
@@ -27,94 +37,197 @@ function resolveResumeCommand(provider: string, sessionId: string): string | nul
   return null;
 }
 
+function toErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    return error.message;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return 'Unexpected error';
+}
+
 export default function ResumeCommandButton({
   provider,
   sessionId,
+  worktreeId,
   className,
 }: ResumeCommandButtonProps) {
-  const [status, setStatus] = useState<CopyStatus>('idle');
+  const [state, setState] = useState<ActionState>({ kind: 'idle' });
   const resetTimerRef = useRef<number | null>(null);
+  const { mutateAsync: launchShell } = useLaunchWorktreeShell();
 
   const command = useMemo(() => resolveResumeCommand(provider, sessionId), [provider, sessionId]);
-  const isSupported = Boolean(command);
+  const canResume = Boolean(command);
+  const canLaunch = Boolean(canResume && worktreeId);
+  const isBusy = state.kind === 'copying' || state.kind === 'launching';
 
   useEffect(() => {
-    if (status === 'idle') {
+    if (state.kind === 'idle' || state.kind === 'copying' || state.kind === 'launching') {
       return;
     }
     const timer = window.setTimeout(() => {
-      setStatus('idle');
-    }, 2000);
+      setState({ kind: 'idle' });
+    }, 2500);
     resetTimerRef.current = timer;
     return () => {
       window.clearTimeout(timer);
     };
-  }, [status]);
+  }, [state]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    return () => {
       if (resetTimerRef.current) {
         window.clearTimeout(resetTimerRef.current);
       }
-    },
-    [],
-  );
+    };
+  }, []);
 
-  const handleCopy = useCallback(async () => {
+  const launchResume = useCallback(async () => {
+    if (!command || !worktreeId) {
+      return;
+    }
+
+    setState({ kind: 'launching' });
+    try {
+      await launchShell({
+        worktreeId,
+        command,
+      });
+      setState({ kind: 'launch-success' });
+    } catch (error) {
+      console.error('Failed to launch resume command', error);
+      setState({
+        kind: 'launch-error',
+        message: toErrorMessage(error),
+      });
+    }
+  }, [command, launchShell, worktreeId]);
+
+  const copyCommand = useCallback(async () => {
     if (!command) {
       return;
     }
+
+    setState({ kind: 'copying' });
     try {
       await navigator.clipboard.writeText(command);
-      setStatus('copied');
+      setState({ kind: 'copy-success' });
     } catch (error) {
       console.error('Failed to copy resume command', error);
-      setStatus('error');
+      setState({
+        kind: 'copy-error',
+        message: toErrorMessage(error),
+      });
     }
   }, [command]);
 
-  const statusLabel =
-    status === 'copied'
-      ? 'Command copied'
-      : status === 'error'
-        ? 'Copy failed'
-        : isSupported
-          ? 'Copy resume command'
-          : 'Resume not supported';
+  const handleClick = useCallback(() => {
+    if (!command || isBusy) {
+      return;
+    }
+    if (canLaunch) {
+      void launchResume();
+    } else {
+      void copyCommand();
+    }
+  }, [canLaunch, command, copyCommand, isBusy, launchResume]);
 
-  const title = isSupported
-    ? `Copy "${command}" to your clipboard`
-    : `Resume via CLI is not available for "${provider}" yet`;
+  const errorMessage =
+    state.kind === 'copy-error' || state.kind === 'launch-error' ? state.message : null;
 
-  const icon =
-    status === 'copied' ? (
-      <Check className="h-3.5 w-3.5" />
-    ) : status === 'error' ? (
-      <AlertCircle className="h-3.5 w-3.5" />
-    ) : (
-      <Copy className="h-3.5 w-3.5" />
-    );
+  const label = useMemo(() => {
+    if (!canResume) {
+      return 'Resume unavailable';
+    }
+    if (canLaunch) {
+      switch (state.kind) {
+        case 'launching':
+          return 'Launching…';
+        case 'launch-success':
+          return 'Resume launched';
+        case 'launch-error':
+          return 'Launch failed';
+        default:
+          return 'Resume in shell';
+      }
+    }
+    switch (state.kind) {
+      case 'copying':
+        return 'Copying…';
+      case 'copy-success':
+        return 'Command copied';
+      case 'copy-error':
+        return 'Copy failed';
+      default:
+        return 'Copy resume command';
+    }
+  }, [canLaunch, canResume, state]);
+
+  const title = useMemo(() => {
+    if (!canResume) {
+      return `Resume via CLI is not available for "${provider}" yet`;
+    }
+    if (canLaunch) {
+      if (errorMessage) {
+        return `Failed to launch: ${errorMessage}`;
+      }
+      return `Launch "${command}" in a shell rooted at this worktree`;
+    }
+    if (errorMessage) {
+      return `Failed to copy: ${errorMessage}`;
+    }
+    return `Copy "${command}" to your clipboard`;
+  }, [canLaunch, canResume, command, errorMessage, provider]);
+
+  const icon = useMemo(() => {
+    if (!canResume) {
+      return <AlertCircle className="h-3.5 w-3.5" />;
+    }
+    if (state.kind === 'launching') {
+      return (
+        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary" />
+      );
+    }
+    if (state.kind === 'copying') {
+      return (
+        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary" />
+      );
+    }
+    if (state.kind === 'launch-success' || state.kind === 'copy-success') {
+      return <Check className="h-3.5 w-3.5" />;
+    }
+    if (state.kind === 'launch-error' || state.kind === 'copy-error') {
+      return <AlertCircle className="h-3.5 w-3.5" />;
+    }
+    if (canLaunch) {
+      return <Play className="h-3.5 w-3.5" />;
+    }
+    return <Copy className="h-3.5 w-3.5" />;
+  }, [canLaunch, canResume, state]);
 
   const buttonClassName = cn(
     'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition',
-    isSupported
-      ? 'border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-800'
-      : 'cursor-not-allowed border-gray-200 text-gray-400',
-    status === 'copied' && 'border-emerald-300 text-emerald-700 hover:border-emerald-300',
-    status === 'error' && 'border-rose-300 text-rose-700 hover:border-rose-300',
+    !canResume && 'cursor-not-allowed border-gray-200 text-gray-400',
+    canResume && !canLaunch && 'border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-800',
+    canLaunch && 'border-blue-200 text-blue-600 hover:border-blue-300 hover:text-blue-700',
+    (state.kind === 'launch-success' || state.kind === 'copy-success') &&
+      'border-emerald-300 text-emerald-700 hover:border-emerald-300',
+    (state.kind === 'launch-error' || state.kind === 'copy-error') &&
+      'border-rose-300 text-rose-700 hover:border-rose-300',
     className,
   );
 
   return (
     <button
       type="button"
-      onClick={handleCopy}
-      disabled={!isSupported}
+      onClick={handleClick}
+      disabled={!canResume || isBusy}
       className={buttonClassName}
       title={title}
     >
       {icon}
-      <span>{statusLabel}</span>
+      <span>{label}</span>
     </button>
   );
 }
