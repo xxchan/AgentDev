@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import type { DiscoveredWorktree, WorktreeSummary } from '@/types';
+import type { DiscoveryParams } from '@/hooks/useDiscoveredWorktrees';
 
 interface WorktreeListProps {
   worktrees: WorktreeSummary[];
@@ -13,6 +14,9 @@ interface WorktreeListProps {
   discoveredWorktrees: DiscoveredWorktree[];
   isDiscoveryLoading: boolean;
   discoveryError: string | null;
+  hasDiscoveryRun: boolean;
+  lastDiscoveryParams: DiscoveryParams | null;
+  onRunDiscovery: (params: DiscoveryParams) => void;
   onRefreshDiscovery?: () => void;
 }
 
@@ -53,6 +57,9 @@ export default function WorktreeList({
   discoveredWorktrees,
   isDiscoveryLoading,
   discoveryError,
+  hasDiscoveryRun,
+  lastDiscoveryParams,
+  onRunDiscovery,
   onRefreshDiscovery = () => {},
 }: WorktreeListProps) {
   const sortedWorktrees = useMemo(() => {
@@ -95,6 +102,26 @@ export default function WorktreeList({
         return a.repoName.localeCompare(b.repoName);
       });
   }, [sortedWorktrees]);
+
+  const [isDiscoveryFormOpen, setDiscoveryFormOpen] = useState(false);
+  const [rootInput, setRootInput] = useState('');
+  const [isRecursive, setIsRecursive] = useState(true);
+
+  useEffect(() => {
+    if (isDiscoveryFormOpen) {
+      setRootInput(lastDiscoveryParams?.root ?? '');
+      setIsRecursive(lastDiscoveryParams?.recursive ?? true);
+    }
+  }, [isDiscoveryFormOpen, lastDiscoveryParams]);
+
+  const handleSubmitDiscovery = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onRunDiscovery({
+      recursive: isRecursive,
+      root: rootInput.trim() === '' ? null : rootInput.trim(),
+    });
+    setDiscoveryFormOpen(false);
+  };
 
   return (
     <div className="flex flex-col gap-6 py-2">
@@ -204,28 +231,87 @@ export default function WorktreeList({
               Unmanaged Worktrees
             </h2>
             <p className="mt-1 text-[0.7rem] text-muted-foreground/80">
-              Recursive scan across nearby git repositories
+              Trigger on-demand discovery across git repositories
             </p>
           </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={onRefreshDiscovery}
-            disabled={isDiscoveryLoading}
-          >
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            {hasDiscoveryRun && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onRefreshDiscovery}
+                disabled={isDiscoveryLoading}
+              >
+                Refresh
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant={isDiscoveryFormOpen ? 'default' : 'outline'}
+              onClick={() => setDiscoveryFormOpen((prev) => !prev)}
+            >
+              {isDiscoveryFormOpen ? 'Close' : 'Discover'}
+            </Button>
+          </div>
         </div>
+        {isDiscoveryFormOpen && (
+          <form
+            onSubmit={handleSubmitDiscovery}
+            className="space-y-3 px-3 pb-3 text-xs text-muted-foreground"
+          >
+            <div className="space-y-1">
+              <label className="block font-medium text-muted-foreground">
+                Scan root directory
+              </label>
+              <input
+                type="text"
+                value={rootInput}
+                onChange={(event) => setRootInput(event.target.value)}
+                placeholder="Leave blank to scan current repository"
+                className="w-full rounded border border-border bg-background px-2 py-1 text-[0.75rem] text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <p className="text-[0.65rem] text-muted-foreground">
+                Provide an absolute path on the AgentDev host. The scan respects git worktree limits and recursion depth.
+              </p>
+            </div>
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={isRecursive}
+                onChange={(event) => setIsRecursive(event.target.checked)}
+                className="h-3.5 w-3.5 rounded border border-border"
+              />
+              <span>Search subdirectories recursively</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <Button type="submit" size="sm" disabled={isDiscoveryLoading}>
+                Run discovery
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setDiscoveryFormOpen(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        )}
         {discoveryError ? (
           <div className="px-3 text-xs text-destructive">
             Failed to discover worktrees: {discoveryError}
           </div>
-        ) : isDiscoveryLoading && discoveredWorktrees.length === 0 ? (
+        ) : isDiscoveryLoading && !hasDiscoveryRun ? (
           <div className="px-3 py-2 text-sm text-muted-foreground">
             <div className="flex items-center space-x-2">
               <div className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-border border-t-primary" />
               <span>Scanning for unmanaged worktrees…</span>
             </div>
+          </div>
+        ) : !hasDiscoveryRun ? (
+          <div className="px-3 py-2 text-xs text-muted-foreground">
+            No scan has been run yet. Choose a directory and start discovery to surface unmanaged worktrees.
           </div>
         ) : discoveredWorktrees.length === 0 ? (
           <div className="px-3 py-2 text-xs text-muted-foreground">
@@ -233,6 +319,11 @@ export default function WorktreeList({
           </div>
         ) : (
           <div className="space-y-2 px-3">
+            {lastDiscoveryParams?.root && (
+              <div className="text-[0.65rem] text-muted-foreground">
+                Last scan root: {lastDiscoveryParams.root}
+              </div>
+            )}
             {discoveredWorktrees.map((entry) => (
               <div
                 key={`${entry.repo}:${entry.path}`}

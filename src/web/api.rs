@@ -143,6 +143,8 @@ pub struct WorktreeProcessListResponse {
 pub struct WorktreeDiscoveryQuery {
     #[serde(default)]
     pub recursive: Option<bool>,
+    #[serde(default)]
+    pub root: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -803,11 +805,34 @@ pub async fn get_worktree_discovery(
     Query(query): Query<WorktreeDiscoveryQuery>,
 ) -> impl IntoResponse {
     let recursive = query.recursive.unwrap_or(true);
+    let root = if let Some(raw) = query.root {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            let path = PathBuf::from(trimmed);
+            if !path.exists() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("Discovery root does not exist: {}", path.display()),
+                )
+                    .into_response();
+            }
+            if !path.is_dir() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("Discovery root is not a directory: {}", path.display()),
+                )
+                    .into_response();
+            }
+            Some(path)
+        }
+    } else {
+        None
+    };
+
     match tokio::task::spawn_blocking(move || {
-        discover_unmanaged_worktrees(DiscoveryOptions {
-            recursive,
-            root: None,
-        })
+        discover_unmanaged_worktrees(DiscoveryOptions { recursive, root })
     })
     .await
     {

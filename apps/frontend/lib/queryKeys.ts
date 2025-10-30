@@ -6,7 +6,8 @@ export const queryKeys = {
     detail: (id: string) => ['worktrees', 'detail', id] as const,
     processes: (id: string) => ['worktrees', 'processes', id] as const,
     git: (id: string) => ['worktrees', 'git', id] as const,
-    discovery: (recursive: boolean) => ['worktrees', 'discovery', recursive] as const,
+    discovery: (recursive: boolean, root: string | null) =>
+      ['worktrees', 'discovery', recursive, root] as const,
   },
   sessions: {
     list: ['sessions', 'list'] as const,

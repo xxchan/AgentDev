@@ -5,19 +5,25 @@ import MainLayout from '@/components/layout/MainLayout';
 import WorktreeList from '@/components/WorktreeList';
 import WorktreeDetails from '@/components/WorktreeDetails';
 import WorktreeProcesses from '@/components/WorktreeProcesses';
-import { useDiscoveredWorktrees } from '@/hooks/useDiscoveredWorktrees';
+import {
+  type DiscoveryParams,
+  useDiscoveredWorktrees,
+} from '@/hooks/useDiscoveredWorktrees';
 import { useWorktrees } from '@/hooks/useWorktrees';
 import { WorktreeSummary } from '@/types';
 
 export default function WorktreesPage() {
   const { worktrees, isLoading } = useWorktrees();
+  const [discoveryParams, setDiscoveryParams] =
+    useState<DiscoveryParams | null>(null);
   const {
     worktrees: discoveredWorktrees,
     isLoading: isDiscoveryLoading,
     isFetching: isDiscoveryFetching,
     error: discoveryError,
     refetch: refetchDiscovery,
-  } = useDiscoveredWorktrees(true);
+    hasRequested: hasDiscoveryRun,
+  } = useDiscoveredWorktrees(discoveryParams);
   const [selectedWorktreeId, setSelectedWorktreeId] = useState<string | null>(
     null,
   );
@@ -53,9 +59,10 @@ export default function WorktreesPage() {
             isDiscoveryLoading || isDiscoveryFetching
           }
           discoveryError={discoveryError}
-          onRefreshDiscovery={() => {
-            void refetchDiscovery();
-          }}
+          hasDiscoveryRun={hasDiscoveryRun}
+          lastDiscoveryParams={discoveryParams}
+          onRunDiscovery={handleRunDiscovery}
+          onRefreshDiscovery={handleRefreshDiscovery}
         />
       }
       main={
@@ -75,3 +82,12 @@ export default function WorktreesPage() {
     />
   );
 }
+  const handleRunDiscovery = (params: DiscoveryParams) => {
+    setDiscoveryParams(params);
+  };
+
+  const handleRefreshDiscovery = () => {
+    if (discoveryParams) {
+      void refetchDiscovery();
+    }
+  };

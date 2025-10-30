@@ -16,13 +16,28 @@ function toErrorMessage(error: unknown): string | null {
   return String(error);
 }
 
-export function useDiscoveredWorktrees(recursive: boolean = true) {
+export interface DiscoveryParams {
+  recursive: boolean;
+  root?: string | null;
+}
+
+export function useDiscoveredWorktrees(params: DiscoveryParams | null) {
+  const recursive = params?.recursive ?? true;
+  const root = params?.root?.trim() ?? null;
   const query = useQuery({
-    queryKey: queryKeys.worktrees.discovery(recursive),
+    enabled: params !== null,
+    queryKey: queryKeys.worktrees.discovery(recursive, root),
     queryFn: ({ signal }) => {
-      const search = recursive ? 'true' : 'false';
+      if (params === null) {
+        return Promise.resolve([] as DiscoveredWorktree[]);
+      }
+      const searchParams = new URLSearchParams();
+      searchParams.set('recursive', String(recursive));
+      if (root) {
+        searchParams.set('root', root);
+      }
       return getJson<DiscoveredWorktree[]>(
-        `/api/worktrees/discovery?recursive=${search}`,
+        `/api/worktrees/discovery?${searchParams.toString()}`,
         { signal },
       );
     },
@@ -42,5 +57,6 @@ export function useDiscoveredWorktrees(recursive: boolean = true) {
     error: toErrorMessage(query.error),
     refetch: query.refetch,
     query,
+    hasRequested: params !== null,
   };
 }
