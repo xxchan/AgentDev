@@ -5,7 +5,7 @@ import { HelpCircle } from 'lucide-react';
 import MainLayout from '@/components/layout/MainLayout';
 import SessionDetailModeToggle from '@/components/SessionDetailModeToggle';
 import SessionListView, { SessionListItem, SessionListMessage } from '@/components/SessionListView';
-import ResumeCommandButton from '@/components/ResumeCommandButton';
+import ResumeCommandButton from '@/features/command/components/ResumeCommandButton';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Tooltip,

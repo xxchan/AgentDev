@@ -3,7 +3,7 @@
 import { useEffect, useMemo } from "react";
 import SessionDetailModeToggle from "@/components/SessionDetailModeToggle";
 import SessionListView, { SessionListItem, SessionListMessage } from "@/components/SessionListView";
-import ResumeCommandButton from "@/components/ResumeCommandButton";
+import ResumeCommandButton from "@/features/command/components/ResumeCommandButton";
 import { useSessionDetailMode } from "@/hooks/useSessionDetailMode";
 import { useSessionDetails } from "@/hooks/useSessionDetails";
 import {

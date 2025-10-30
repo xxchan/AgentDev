@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, Copy, Play } from 'lucide-react';
-import { useLaunchWorktreeShell } from '@/hooks/useLaunchWorktreeShell';
+import { useLaunchWorktreeShell } from '@/features/command/hooks/useLaunchWorktreeShell';
 import { ApiError } from '@/lib/apiClient';
 import { cn } from '@/lib/utils';
 
