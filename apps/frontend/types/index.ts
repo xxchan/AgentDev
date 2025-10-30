@@ -39,6 +39,7 @@ export interface SessionSummary extends BaseSessionSummary {
   repo_name?: string | null;
   branch?: string | null;
   working_dir?: string | null;
+  working_dir_exists?: boolean | null;
 }
 
 export interface SessionProviderSummary {

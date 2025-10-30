@@ -162,10 +162,7 @@ fn build_router() -> Router {
             "/api/worktrees/:worktree_id/shell",
             post(post_worktree_shell),
         )
-        .route(
-            "/api/shell",
-            post(post_shell),
-        )
+        .route("/api/shell", post(post_shell))
         .route(
             "/api/worktrees/:worktree_id/merge",
             post(post_worktree_merge),

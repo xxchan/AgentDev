@@ -50,7 +50,12 @@ pub fn discover_worktrees(options: DiscoveryOptions) -> Result<Vec<DiscoveredWor
     let repos = if options.recursive {
         discover_repositories_recursive(&root)?
     } else {
-        vec![resolve_repo_root(&root)?]
+        let repo = resolve_repo_root(&root)?;
+        if let Ok((_, canonical_root)) = repository_identity(&repo) {
+            vec![canonical_root]
+        } else {
+            vec![repo]
+        }
     };
 
     if repos.is_empty() {
@@ -169,7 +174,7 @@ fn resolve_repo_root(start: &Path) -> Result<PathBuf> {
 
 fn discover_repositories_recursive(start: &Path) -> Result<Vec<PathBuf>> {
     let mut repos = Vec::new();
-    let mut seen_keys: HashSet<String> = HashSet::new();
+    let mut seen_common_dirs: HashSet<String> = HashSet::new();
     let mut stack: VecDeque<(PathBuf, usize)> = VecDeque::new();
     stack.push_back((start.to_path_buf(), 0));
 
@@ -180,9 +185,19 @@ fn discover_repositories_recursive(start: &Path) -> Result<Vec<PathBuf>> {
 
         let is_repo = is_git_repo_root(&dir);
         if is_repo {
-            let key = canonical_string(&dir)?;
-            if seen_keys.insert(key.clone()) {
-                repos.push(PathBuf::from(&key));
+            let mut handled = false;
+            if let Ok((common_key, repo_root)) = repository_identity(&dir) {
+                if seen_common_dirs.insert(common_key) {
+                    repos.push(repo_root);
+                }
+                handled = true;
+            }
+
+            if !handled {
+                let key = canonical_string(&dir)?;
+                if seen_common_dirs.insert(key.clone()) {
+                    repos.push(PathBuf::from(&key));
+                }
             }
 
             if depth > 0 {
@@ -217,6 +232,39 @@ fn discover_repositories_recursive(start: &Path) -> Result<Vec<PathBuf>> {
     Ok(repos)
 }
 
+fn repository_identity(path: &Path) -> Result<(String, PathBuf)> {
+    let repo_str = path_to_str(path)?;
+    let common_raw = execute_git(&["-C", repo_str, "rev-parse", "--git-common-dir"])?;
+    let trimmed = common_raw.trim();
+
+    let common_path = {
+        let candidate = Path::new(trimmed);
+        if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            path.join(candidate)
+        }
+    };
+
+    let canonical_common = fs::canonicalize(&common_path).unwrap_or(common_path.clone());
+    let unique_key = canonical_common.to_string_lossy().into_owned();
+
+    let repo_root = if canonical_common
+        .file_name()
+        .is_some_and(|name| name == ".git")
+    {
+        canonical_common
+            .parent()
+            .map(Path::to_path_buf)
+            .context("Failed to resolve repository root from git common dir")?
+    } else {
+        fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    };
+
+    let repo_root = fs::canonicalize(&repo_root).unwrap_or(repo_root);
+    Ok((unique_key, repo_root))
+}
+
 fn discover_repo_worktrees(
     repo_root: &Path,
     managed_paths: &HashSet<String>,
@@ -225,13 +273,17 @@ fn discover_repo_worktrees(
     let repo_str = path_to_str(repo_root)?;
     let output = execute_git(&["-C", repo_str, "worktree", "list", "--porcelain"])?;
     let repo_key = canonical_string(repo_root)?;
+    let primary_repo_key = repository_identity(repo_root)
+        .ok()
+        .and_then(|(_, canonical_root)| canonical_string(&canonical_root).ok())
+        .unwrap_or_else(|| repo_key.clone());
 
     let entries = parse_git_worktree_porcelain(&output)?;
     let mut result = Vec::new();
 
     for entry in entries {
         let canonical = canonical_string(&entry.path)?;
-        if canonical == repo_key {
+        if canonical == repo_key || canonical == primary_repo_key {
             continue;
         }
         if managed_paths.contains(&canonical) {

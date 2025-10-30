@@ -417,6 +417,77 @@ fn test_discovery_lists_unmanaged_worktrees() {
 }
 
 #[test]
+fn test_discovery_from_worktree_skips_primary_repo() {
+    let ctx = TestContext::new("test-repo");
+    ctx.setup_remote_with_main();
+
+    let manual_path = ctx.temp_dir.path().join("test-repo-from-worktree");
+    let manual_path_str = manual_path.to_string_lossy().to_string();
+
+    let status = std::process::Command::new("git")
+        .args(["worktree", "add", "-b", "manual-branch", &manual_path_str])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "failed to create manual worktree: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let manual_path_canonical = manual_path
+        .canonicalize()
+        .unwrap_or_else(|_| manual_path.clone());
+    let manual_path_str = manual_path_canonical.to_string_lossy().to_string();
+
+    let git_common = std::process::Command::new("git")
+        .args(["-C", &manual_path_str, "rev-parse", "--git-common-dir"])
+        .output()
+        .unwrap();
+    assert!(
+        git_common.status.success(),
+        "rev-parse --git-common-dir failed: {}",
+        String::from_utf8_lossy(&git_common.stderr)
+    );
+    let common_dir = String::from_utf8_lossy(&git_common.stdout)
+        .trim()
+        .to_string();
+    assert!(
+        common_dir.ends_with(".git"),
+        "expected git common dir to end with .git, got {common_dir}"
+    );
+
+    let output = ctx
+        .xlaude_in_dir(&manual_path_canonical, &["worktree", "discovery", "--json"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let entries = value.as_array().expect("discovery JSON should be array");
+    let discovered_paths: Vec<PathBuf> = entries
+        .iter()
+        .filter_map(|entry| entry.get("path"))
+        .filter_map(|path| path.as_str())
+        .filter_map(|path| PathBuf::from(path).canonicalize().ok())
+        .collect();
+
+    assert!(
+        discovered_paths.contains(&manual_path_canonical),
+        "discovery should report the manual worktree: {stdout}"
+    );
+
+    let state = ctx.read_state();
+    let worktrees = state["worktrees"].as_object().expect("worktrees map");
+    assert!(worktrees.contains_key("test-repo/manual-branch"));
+    assert!(
+        !worktrees.keys().any(|key| key.ends_with("/main")),
+        "discovery should not register the primary repository as a worktree: {:?}",
+        worktrees.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_discovery_json_output() {
     let ctx = TestContext::new("test-repo");
 

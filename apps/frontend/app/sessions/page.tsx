@@ -29,6 +29,8 @@ import { queryKeys } from '@/lib/queryKeys';
 
 type SessionGroupKind = 'all' | 'worktree' | 'directory' | 'unassigned';
 
+type DirectoryPresence = 'present' | 'missing' | 'unknown';
+
 interface SessionGroup {
   id: string;
   label: string;
@@ -39,6 +41,7 @@ interface SessionGroup {
   worktreeId?: string;
   workingDir?: string;
   workingDirKey?: string;
+  directoryStatus?: DirectoryPresence;
 }
 
 interface SessionGroupSection {
@@ -108,6 +111,37 @@ function normalizeWorkingDirKey(path: string): string {
   const normalized = trimmed.replace(/\\/g, '/');
   const withoutTrailing = normalized.replace(/\/+$/, '');
   return withoutTrailing || '__root__';
+}
+
+function interpretDirectoryPresence(
+  exists: boolean | null | undefined,
+): DirectoryPresence {
+  if (exists === true) {
+    return 'present';
+  }
+  if (exists === false) {
+    return 'missing';
+  }
+  return 'unknown';
+}
+
+function mergeDirectoryPresence(
+  current: DirectoryPresence | undefined,
+  incoming: DirectoryPresence,
+): DirectoryPresence {
+  if (!current) {
+    return incoming;
+  }
+  if (incoming === 'unknown') {
+    return current;
+  }
+  if (current === 'unknown') {
+    return incoming;
+  }
+  if (current === incoming) {
+    return current;
+  }
+  return 'unknown';
 }
 
 function buildSessionIndex(sessions: SessionSummary[]): SessionIndex {
@@ -189,6 +223,7 @@ function buildSessionIndex(sessions: SessionSummary[]): SessionIndex {
     if (session.working_dir) {
       const workingDirKey = normalizeWorkingDirKey(session.working_dir);
       const groupId = `directory:${workingDirKey}`;
+      const directoryStatus = interpretDirectoryPresence(session.working_dir_exists);
       const group = ensureGroup(groupId, () => ({
         id: groupId,
         label: session.working_dir ?? 'Unknown directory',
@@ -198,7 +233,9 @@ function buildSessionIndex(sessions: SessionSummary[]): SessionIndex {
         latestActivity: 0,
         workingDir: session.working_dir ?? undefined,
         workingDirKey,
+        directoryStatus,
       }));
+      group.directoryStatus = mergeDirectoryPresence(group.directoryStatus, directoryStatus);
       updateGroup(group, session, timestamp);
       return;
     }
@@ -223,6 +260,7 @@ function buildSessionIndex(sessions: SessionSummary[]): SessionIndex {
     worktreeId: group.worktreeId,
     workingDir: group.workingDir,
     workingDirKey: group.workingDirKey,
+    directoryStatus: group.directoryStatus,
   }));
 
   groupsArray.sort((a, b) => {
@@ -283,12 +321,52 @@ function groupSessionGroups(groups: SessionGroup[]): SessionGroupSection[] {
     sections.push({ title: 'Worktrees', groups: bucket.worktree });
   }
   if (bucket.directory.length > 0) {
-    sections.push({ title: 'Directories', groups: bucket.directory });
+    const available = bucket.directory.filter((group) => group.directoryStatus === 'present');
+    const unknown = bucket.directory.filter(
+      (group) => !group.directoryStatus || group.directoryStatus === 'unknown',
+    );
+    const missing = bucket.directory.filter((group) => group.directoryStatus === 'missing');
+    if (available.length > 0) {
+      sections.push({ title: 'Directories (Available)', groups: available });
+    }
+    if (unknown.length > 0) {
+      sections.push({ title: 'Directories (Unknown)', groups: unknown });
+    }
+    if (missing.length > 0) {
+      sections.push({ title: 'Directories (Missing)', groups: missing });
+    }
   }
   if (bucket.unassigned.length > 0) {
     sections.push({ title: 'Unassigned', groups: bucket.unassigned });
   }
   return sections;
+}
+
+function describeDirectoryStatus(
+  status?: DirectoryPresence,
+): { label: string; className: string } | null {
+  if (!status) {
+    return null;
+  }
+  switch (status) {
+    case 'present':
+      return {
+        label: 'Directory available on disk',
+        className: 'text-emerald-600 dark:text-emerald-400',
+      };
+    case 'missing':
+      return {
+        label: 'Directory missing on disk',
+        className: 'text-destructive',
+      };
+    case 'unknown':
+      return {
+        label: 'Directory status unknown',
+        className: 'text-muted-foreground',
+      };
+    default:
+      return null;
+  }
 }
 
 function buildMetadataParts(session: SessionSummary): string[] {
@@ -301,7 +379,11 @@ function buildMetadataParts(session: SessionSummary): string[] {
     metadata.push(`Repo: ${repoDescriptor}`);
   }
   if (session.working_dir) {
-    metadata.push(`Directory: ${session.working_dir}`);
+    let directoryLabel = `Directory: ${session.working_dir}`;
+    if (session.working_dir_exists === false) {
+      directoryLabel = `${directoryLabel} (missing)`;
+    }
+    metadata.push(directoryLabel);
   }
   return metadata;
 }
@@ -559,6 +641,10 @@ function SessionGroupSidebar({
               <div className="mt-1 space-y-1">
                 {section.groups.map((group) => {
                   const isSelected = group.id === selectedGroupId;
+                  const directoryStatusInfo =
+                    group.kind === 'directory'
+                      ? describeDirectoryStatus(group.directoryStatus)
+                      : null;
                   return (
                     <button
                       key={group.id}
@@ -579,6 +665,16 @@ function SessionGroupSidebar({
                           {group.count}
                         </span>
                       </div>
+                      {directoryStatusInfo ? (
+                        <p
+                          className={cn(
+                            'text-[0.65rem] font-medium',
+                            directoryStatusInfo.className,
+                          )}
+                        >
+                          {directoryStatusInfo.label}
+                        </p>
+                      ) : null}
                       {group.description ? (
                         <p className="mt-1 text-[0.7rem] text-muted-foreground">
                           {group.description}
@@ -630,6 +726,11 @@ function SessionSummaryList({
     onProviderChange(value);
   };
 
+  const selectedDirectoryStatus =
+    selectedGroup?.kind === 'directory'
+      ? describeDirectoryStatus(selectedGroup.directoryStatus)
+      : null;
+
   return (
     <div className="flex h-full flex-1 min-h-0 flex-col rounded-lg border border-border bg-card">
       <div className="border-b border-border pl-3 pr-4 py-3">
@@ -639,6 +740,16 @@ function SessionSummaryList({
               <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                 {selectedGroup?.label ?? 'Sessions'}
               </h3>
+              {selectedDirectoryStatus ? (
+                <p
+                  className={cn(
+                    'text-xs font-medium',
+                    selectedDirectoryStatus.className,
+                  )}
+                >
+                  {selectedDirectoryStatus.label}
+                </p>
+              ) : null}
               {selectedGroup?.description ? (
                 <p className="text-xs text-muted-foreground/80">
                   {selectedGroup.description}

@@ -5,6 +5,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -13,7 +14,6 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Instant;
-use directories::BaseDirs;
 
 use crate::{
     discovery::{
@@ -64,6 +64,8 @@ pub struct SessionSummaryPayload {
     pub branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir_exists: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -868,13 +870,13 @@ pub async fn get_worktree_discovery(
 
 fn expand_discovery_root(input: &str) -> Result<PathBuf, String> {
     if input == "~" {
-        let base_dirs = BaseDirs::new()
-            .ok_or_else(|| "Failed to resolve home directory for ~".to_string())?;
+        let base_dirs =
+            BaseDirs::new().ok_or_else(|| "Failed to resolve home directory for ~".to_string())?;
         return Ok(base_dirs.home_dir().to_path_buf());
     }
     if let Some(stripped) = input.strip_prefix("~/") {
-        let base_dirs = BaseDirs::new()
-            .ok_or_else(|| "Failed to resolve home directory for ~".to_string())?;
+        let base_dirs =
+            BaseDirs::new().ok_or_else(|| "Failed to resolve home directory for ~".to_string())?;
         let mut path = base_dirs.home_dir().to_path_buf();
         if !stripped.is_empty() {
             path.push(stripped);
@@ -1010,7 +1012,9 @@ pub async fn post_shell(Json(payload): Json<LaunchShellRequest>) -> impl IntoRes
             .into_response(),
         Ok(Ok(LaunchShellResult::NotFound)) => (
             StatusCode::NOT_FOUND,
-            Json(CommandFailurePayload::simple("Directory not found".to_string())),
+            Json(CommandFailurePayload::simple(
+                "Directory not found".to_string(),
+            )),
         )
             .into_response(),
         Ok(Err(err)) => (
@@ -1456,6 +1460,8 @@ fn collect_all_sessions() -> Result<SessionListResponse> {
                 })
                 .unwrap_or((None, None, None, None));
 
+            let working_dir_exists = working_dir_path.map(|path| path.is_dir());
+
             let working_dir = working_dir_path
                 .map(|path| path.display().to_string())
                 .or_else(|| {
@@ -1485,6 +1491,7 @@ fn collect_all_sessions() -> Result<SessionListResponse> {
                 repo_name,
                 branch,
                 working_dir,
+                working_dir_exists,
             }
         })
         .collect();
@@ -1776,10 +1783,7 @@ fn execute_terminal_launch(command_line: Vec<String>) -> Result<LaunchShellResul
     Ok(LaunchShellResult::Success)
 }
 
-fn build_terminal_launch_command(
-    path: &Path,
-    command: Option<&str>,
-) -> Result<Vec<String>> {
+fn build_terminal_launch_command(path: &Path, command: Option<&str>) -> Result<Vec<String>> {
     if let Ok(template) = std::env::var("AGENTDEV_TERMINAL_COMMAND") {
         if !template.trim().is_empty() {
             return build_terminal_command_from_template(path, command, &template);
@@ -1812,10 +1816,7 @@ fn build_terminal_command_from_template(
     Ok(tokens)
 }
 
-fn build_default_terminal_command(
-    path: &Path,
-    command: Option<&str>,
-) -> Result<Vec<String>> {
+fn build_default_terminal_command(path: &Path, command: Option<&str>) -> Result<Vec<String>> {
     #[cfg(target_os = "macos")]
     {
         build_macos_terminal_command(path, command)
@@ -1831,10 +1832,7 @@ fn build_default_terminal_command(
 }
 
 #[cfg(target_os = "macos")]
-fn build_macos_terminal_command(
-    path: &Path,
-    command: Option<&str>,
-) -> Result<Vec<String>> {
+fn build_macos_terminal_command(path: &Path, command: Option<&str>) -> Result<Vec<String>> {
     let path_str = path
         .to_str()
         .ok_or_else(|| anyhow!("Directory path contains invalid UTF-8"))?;
