@@ -38,6 +38,7 @@ rayon = "1.10"
 rust-embed = { version = "8.0", features = ["axum", "interpolate-folder-path"] }
 mime_guess = "2.0"
 md5 = "0.7"
+which = "8.0.0"
 
 [dev-dependencies]
 insta = { version = "1.41.1", features = ["json", "redactions"] }

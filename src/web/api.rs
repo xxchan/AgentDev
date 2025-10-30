@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Instant;
@@ -24,7 +24,8 @@ use crate::{
         ProcessStatus as RegistryProcessStatus, canonicalize_cwd,
     },
     sessions::{
-        SessionEvent, SessionProvider, SessionRecord, canonicalize as canonicalize_session_path, default_providers,
+        SessionEvent, SessionProvider, SessionRecord, canonicalize as canonicalize_session_path,
+        default_providers,
     },
     state::{WorktreeInfo, XlaudeState},
 };
@@ -147,6 +148,76 @@ pub struct LaunchWorktreeCommandRequest {
 #[derive(Serialize, Clone, Debug)]
 pub struct LaunchWorktreeCommandResponse {
     pub process: WorktreeProcessSummary,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MergeStrategyOption {
+    FfOnly,
+    Merge,
+    Squash,
+}
+
+impl Default for MergeStrategyOption {
+    fn default() -> Self {
+        MergeStrategyOption::FfOnly
+    }
+}
+
+impl MergeStrategyOption {
+    fn as_cli_flag(&self) -> &'static str {
+        match self {
+            MergeStrategyOption::FfOnly => "ff-only",
+            MergeStrategyOption::Merge => "merge",
+            MergeStrategyOption::Squash => "squash",
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct MergeWorktreeRequest {
+    #[serde(default)]
+    pub strategy: Option<MergeStrategyOption>,
+    #[serde(default)]
+    pub push: bool,
+    #[serde(default)]
+    pub cleanup: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MergeWorktreeResponse {
+    pub exit_code: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct DeleteWorktreeRequest {
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct DeleteWorktreeResponse {
+    pub exit_code: i32,
+    pub removed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct CommandFailurePayload {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -449,7 +520,10 @@ fn user_messages_to_events(record: &SessionRecord) -> Vec<SessionEvent> {
         .collect()
 }
 
-fn conversation_events(record: &SessionRecord, provider: &Box<dyn SessionProvider + Send + Sync>) -> Result<Vec<SessionEvent>> {
+fn conversation_events(
+    record: &SessionRecord,
+    provider: &Box<dyn SessionProvider + Send + Sync>,
+) -> Result<Vec<SessionEvent>> {
     let all_events = provider.load_session_events(record)?;
     Ok(all_events
         .into_iter()
@@ -771,6 +845,367 @@ pub async fn post_worktree_command(
         )
             .into_response(),
     }
+}
+
+pub async fn post_worktree_merge(
+    AxumPath(worktree_id): AxumPath<String>,
+    Json(payload): Json<MergeWorktreeRequest>,
+) -> impl IntoResponse {
+    let id_for_error = worktree_id.clone();
+    match tokio::task::spawn_blocking(move || merge_worktree_via_cli(worktree_id, payload)).await {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(WorktreeActionError::NotFound)) => (
+            StatusCode::NOT_FOUND,
+            format!("Worktree {id_for_error} not found"),
+        )
+            .into_response(),
+        Ok(Err(WorktreeActionError::CommandFailure(payload))) => {
+            (StatusCode::CONFLICT, Json(payload)).into_response()
+        }
+        Ok(Err(WorktreeActionError::Internal(err))) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to merge worktree: {err}"),
+        )
+            .into_response(),
+        Err(join_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Merge task failed: {join_err}"),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn post_worktree_delete(
+    AxumPath(worktree_id): AxumPath<String>,
+    Json(payload): Json<DeleteWorktreeRequest>,
+) -> impl IntoResponse {
+    let id_for_error = worktree_id.clone();
+    match tokio::task::spawn_blocking(move || delete_worktree_via_cli(worktree_id, payload)).await {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(WorktreeActionError::NotFound)) => (
+            StatusCode::NOT_FOUND,
+            format!("Worktree {id_for_error} not found"),
+        )
+            .into_response(),
+        Ok(Err(WorktreeActionError::CommandFailure(payload))) => {
+            (StatusCode::CONFLICT, Json(payload)).into_response()
+        }
+        Ok(Err(WorktreeActionError::Internal(err))) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to delete worktree: {err}"),
+        )
+            .into_response(),
+        Err(join_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Delete task failed: {join_err}"),
+        )
+            .into_response(),
+    }
+}
+
+enum WorktreeActionError {
+    NotFound,
+    CommandFailure(CommandFailurePayload),
+    Internal(anyhow::Error),
+}
+
+impl From<anyhow::Error> for WorktreeActionError {
+    fn from(value: anyhow::Error) -> Self {
+        WorktreeActionError::Internal(value)
+    }
+}
+
+fn merge_worktree_via_cli(
+    worktree_id: String,
+    payload: MergeWorktreeRequest,
+) -> Result<MergeWorktreeResponse, WorktreeActionError> {
+    let state = XlaudeState::load().map_err(WorktreeActionError::from)?;
+    let info = state
+        .worktrees
+        .get(&worktree_id)
+        .cloned()
+        .ok_or(WorktreeActionError::NotFound)?;
+
+    let strategy = payload.strategy.unwrap_or_default();
+
+    let mut args = vec![
+        "worktree".to_string(),
+        "merge".to_string(),
+        info.name.clone(),
+    ];
+
+    if strategy != MergeStrategyOption::FfOnly {
+        args.push("--strategy".to_string());
+        args.push(strategy.as_cli_flag().to_string());
+    }
+    if payload.push {
+        args.push("--push".to_string());
+    }
+    if payload.cleanup {
+        args.push("--cleanup".to_string());
+    }
+
+    let output = run_agentdev_cli(args, Vec::new()).map_err(WorktreeActionError::from)?;
+    if !output.success {
+        let failure = build_command_failure("Worktree merge failed", &output);
+        return Err(WorktreeActionError::CommandFailure(failure));
+    }
+
+    Ok(MergeWorktreeResponse {
+        exit_code: output.normalized_exit_code(),
+        stdout: output.stdout_trimmed(),
+        stderr: output.stderr_trimmed(),
+    })
+}
+
+fn delete_worktree_via_cli(
+    worktree_id: String,
+    payload: DeleteWorktreeRequest,
+) -> Result<DeleteWorktreeResponse, WorktreeActionError> {
+    let state = XlaudeState::load().map_err(WorktreeActionError::from)?;
+    let info = state
+        .worktrees
+        .get(&worktree_id)
+        .cloned()
+        .ok_or(WorktreeActionError::NotFound)?;
+
+    let args = vec![
+        "worktree".to_string(),
+        "delete".to_string(),
+        info.name.clone(),
+    ];
+
+    let mut extra_env: Vec<(String, String)> = Vec::new();
+    if payload.force {
+        extra_env.push(("XLAUDE_YES".to_string(), "1".to_string()));
+    }
+
+    let output = run_agentdev_cli(args, extra_env).map_err(WorktreeActionError::from)?;
+
+    let removed = {
+        let refreshed = XlaudeState::load().map_err(WorktreeActionError::from)?;
+        !refreshed.worktrees.contains_key(&worktree_id)
+    };
+
+    if !output.success || !removed {
+        let mut failure = build_command_failure("Worktree deletion failed", &output);
+        if !removed {
+            let fallback = if payload.force {
+                "Worktree deletion did not complete"
+            } else {
+                "Worktree deletion was cancelled; resolve pending work or retry with force"
+            };
+
+            if failure.message.trim().is_empty() || failure.message == "Worktree deletion failed" {
+                failure.message = fallback.to_string();
+            }
+        }
+        return Err(WorktreeActionError::CommandFailure(failure));
+    }
+
+    Ok(DeleteWorktreeResponse {
+        exit_code: output.normalized_exit_code(),
+        removed,
+        stdout: output.stdout_trimmed(),
+        stderr: output.stderr_trimmed(),
+    })
+}
+
+struct CliCommandOutput {
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    success: bool,
+}
+
+impl CliCommandOutput {
+    fn normalized_exit_code(&self) -> i32 {
+        self.exit_code.unwrap_or(if self.success { 0 } else { -1 })
+    }
+
+    fn stdout_trimmed(&self) -> Option<String> {
+        trimmed_or_none(&self.stdout)
+    }
+
+    fn stderr_trimmed(&self) -> Option<String> {
+        trimmed_or_none(&self.stderr)
+    }
+}
+
+fn run_agentdev_cli(
+    args: Vec<String>,
+    extra_env: Vec<(String, String)>,
+) -> Result<CliCommandOutput> {
+    let exe = resolve_agentdev_cli_executable()?;
+    let mut command = Command::new(&exe);
+    command.args(&args);
+    command.env("XLAUDE_NON_INTERACTIVE", "1");
+    command.env("NO_COLOR", "1");
+    command.env("CLICOLOR_FORCE", "0");
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    let output = command
+        .output()
+        .map_err(|err| anyhow!("Failed to run agentdev command {:?}: {err}", args))?;
+
+    Ok(CliCommandOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        exit_code: output.status.code(),
+        success: output.status.success(),
+    })
+}
+
+fn trimmed_or_none(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn build_command_failure(context: &str, output: &CliCommandOutput) -> CommandFailurePayload {
+    let stderr = output.stderr_trimmed();
+    let stdout = output.stdout_trimmed();
+    let message = stderr
+        .clone()
+        .or_else(|| stdout.clone())
+        .unwrap_or_else(|| context.to_string());
+
+    CommandFailurePayload {
+        message,
+        stdout,
+        stderr,
+        exit_code: output.exit_code,
+    }
+}
+
+fn resolve_agentdev_cli_executable() -> Result<PathBuf> {
+    if let Some(path) = cli_override_from_env()? {
+        return Ok(path);
+    }
+
+    let current = std::env::current_exe()?;
+
+    if is_cli_binary(&current) {
+        return Ok(current);
+    }
+
+    if let Some(path) = find_cli_nearby(&current) {
+        return Ok(path);
+    }
+
+    if let Some(path) = search_workspace_targets(&current) {
+        return Ok(path);
+    }
+
+    for candidate in CLI_BINARY_NAMES {
+        if let Ok(path) = which::which(candidate) {
+            return Ok(path);
+        }
+    }
+
+    Err(anyhow!(
+        "Unable to locate agentdev CLI binary. Set AGENTDEV_CLI_BIN to override."
+    ))
+}
+
+fn cli_override_from_env() -> Result<Option<PathBuf>> {
+    match std::env::var_os("AGENTDEV_CLI_BIN") {
+        None => Ok(None),
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if path.is_file() {
+                Ok(Some(path))
+            } else {
+                Err(anyhow!(
+                    "AGENTDEV_CLI_BIN points to {:?}, but no executable was found there",
+                    path
+                ))
+            }
+        }
+    }
+}
+
+const CLI_BINARY_NAMES: &[&str] = &["agentdev", "xlaude"];
+
+fn is_cli_binary(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| CLI_BINARY_NAMES.iter().any(|name| stem == *name))
+        .unwrap_or(false)
+}
+
+fn find_cli_nearby(current: &Path) -> Option<PathBuf> {
+    let dir = current.parent()?;
+    for name in CLI_BINARY_NAMES {
+        for candidate in candidate_paths(dir, name) {
+            if candidate.is_file() && candidate != current {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn search_workspace_targets(current: &Path) -> Option<PathBuf> {
+    let mut profiles = Vec::new();
+    if let Some(profile) = current
+        .parent()
+        .and_then(|dir| dir.file_name())
+        .and_then(|value| value.to_str())
+    {
+        profiles.push(profile.to_string());
+    }
+    if !profiles.iter().any(|p| p == "debug") {
+        profiles.push("debug".to_string());
+    }
+    if !profiles.iter().any(|p| p == "release") {
+        profiles.push("release".to_string());
+    }
+
+    let mut dir_opt = current.parent();
+    while let Some(dir) = dir_opt {
+        let target_root = dir.join("target");
+        for profile in &profiles {
+            let profile_dir = target_root.join(profile);
+            if let Some(path) = find_cli_in_dir(&profile_dir) {
+                return Some(path);
+            }
+        }
+        dir_opt = dir.parent();
+    }
+    None
+}
+
+fn find_cli_in_dir(dir: &Path) -> Option<PathBuf> {
+    for name in CLI_BINARY_NAMES {
+        for candidate in candidate_paths(dir, name) {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn candidate_paths(dir: &Path, name: &str) -> Vec<PathBuf> {
+    let mut paths = vec![dir.join(name)];
+    if !name.to_ascii_lowercase().ends_with(".exe") {
+        paths.push(dir.join(format!("{name}.exe")));
+    }
+    paths
+}
+
+#[cfg(not(windows))]
+fn candidate_paths(dir: &Path, name: &str) -> Vec<PathBuf> {
+    vec![dir.join(name)]
 }
 
 fn collect_all_sessions() -> Result<SessionListResponse> {

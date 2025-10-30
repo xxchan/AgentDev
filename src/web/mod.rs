@@ -157,6 +157,14 @@ fn build_router() -> Router {
             "/api/worktrees/:worktree_id/commands",
             post(post_worktree_command),
         )
+        .route(
+            "/api/worktrees/:worktree_id/merge",
+            post(post_worktree_merge),
+        )
+        .route(
+            "/api/worktrees/:worktree_id/delete",
+            post(post_worktree_delete),
+        )
         // Static file serving (fallback to index.html for SPA)
         .fallback(serve_frontend)
         .layer(CorsLayer::permissive())

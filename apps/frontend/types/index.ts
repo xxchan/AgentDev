@@ -156,3 +156,35 @@ export interface WorktreeProcessListResponse {
 export interface LaunchWorktreeCommandResponse {
   process: WorktreeProcessSummary;
 }
+
+export type MergeStrategyOption = 'ff-only' | 'merge' | 'squash';
+
+export interface MergeWorktreeRequest {
+  strategy?: MergeStrategyOption;
+  push?: boolean;
+  cleanup?: boolean;
+}
+
+export interface MergeWorktreeResponse {
+  exit_code: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface DeleteWorktreeRequest {
+  force?: boolean;
+}
+
+export interface DeleteWorktreeResponse {
+  exit_code: number;
+  removed: boolean;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface CommandFailurePayload {
+  message: string;
+  stdout?: string;
+  stderr?: string;
+  exit_code?: number;
+}

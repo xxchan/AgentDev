@@ -351,9 +351,7 @@ impl CodexParsedEntry {
         }
 
         let working_dir = self.working_dir_hint();
-        let tool = payload_value
-            .as_ref()
-            .and_then(extract_codex_tool_event);
+        let tool = payload_value.as_ref().and_then(extract_codex_tool_event);
 
         let data = attach_working_dir(payload_value, working_dir.clone());
 

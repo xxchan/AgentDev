@@ -19,6 +19,9 @@
 - Git diff 和 Session 列表改造时先梳理 `rg` 结果、一次性提炼共享 token/样式表，比逐个替换散落的 `bg-gray-*` 更高效。
 - apply_patch 多次失败会拖慢节奏，规模较大的替换可以先落库到工具函数/常量，再用脚本或结构化更新减少反复尝试。
 - lint/build 等耗时校验建议在主要改动完成后集中执行，避免在局部调试阶段重复等待 Next.js/Rust 构建。
+- 本地已有常驻 3000/3100 端口时，`pnpm run dev:ui` 要预先设定随机端口（例如导出 `AGENTDEV_BACKEND_PORT=$((RANDOM%1000+3000))` 和 `AGENTDEV_FRONTEND_PORT=$((AGENTDEV_BACKEND_PORT+100))`）再启动，避免 Next.js 把 API 请求 rewrite 到 404。
+- Dashboard 新增的 merge/delete 入口只是包装 CLI：调试时用 `/api/worktrees/<id>/<merge|delete>` 的 curl 检查 200/409/404，真测前挑选一次性分支，避免误删主线 worktree。
+- 后端代码若需要调用 CLI，切勿直接用 `current_exe()` 推断路径；在 `agentdev-ui` 进程里这会重新启动 UI 进程并返回 HTML fallback。请复用 `resolve_agentdev_cli_executable`（或设置 `AGENTDEV_CLI_BIN`）确保命中真正的 `agentdev` 可执行文件。
 
 本工具已从 xlaude 更名为 agentdev：
 - 可执行文件名：`agentdev`
