@@ -1,1 +1,1 @@
-export { default } from './sessions/page';
+export { default } from './worktrees/page';
