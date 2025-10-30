@@ -20,7 +20,7 @@ export function useDiscoveredWorktrees(recursive: boolean = true) {
   const query = useQuery({
     queryKey: queryKeys.worktrees.discovery(recursive),
     queryFn: ({ signal }) => {
-      const search = recursive ? '1' : '0';
+      const search = recursive ? 'true' : 'false';
       return getJson<DiscoveredWorktree[]>(
         `/api/worktrees/discovery?recursive=${search}`,
         { signal },
