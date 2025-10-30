@@ -351,7 +351,7 @@ function describeDirectoryStatus(
   switch (status) {
     case 'present':
       return {
-        label: 'Directory available on disk',
+        label: "",
         className: 'text-emerald-600 dark:text-emerald-400',
       };
     case 'missing':

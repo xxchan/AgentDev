@@ -147,6 +147,53 @@ function extractToolTextOutput(output: unknown): string | null {
   return null;
 }
 
+function normalizeCommandValue(value: unknown): string | null {
+  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+    return value.join(" ");
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  return null;
+}
+
+function extractToolCommandSummary(tool: SessionToolEvent): string | null {
+  if (tool.phase !== "use") {
+    return null;
+  }
+
+  const direct = normalizeCommandValue(tool.input);
+  if (direct) {
+    return direct;
+  }
+
+  if (isRecord(tool.input)) {
+    const candidate = normalizeCommandValue(tool.input["command"]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  if (isRecord(tool.extras)) {
+    const candidate = normalizeCommandValue(tool.extras["command"]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  if (isRecord(tool.output)) {
+    const candidate = normalizeCommandValue(tool.output["command"]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 function renderRawDetails(label: string, value: unknown) {
   const formatted = formatStructuredValue(value);
   if (!formatted) {
@@ -263,6 +310,8 @@ function buildToolRender(
   if (tool.working_dir && tool.working_dir.trim().length > 0) {
     metadataItems.push({ label: "Working dir", value: tool.working_dir });
   }
+
+  const commandSummary = extractToolCommandSummary(tool);
 
   const summaryBlocks: ReactNode[] = [];
   const rawBlocks: ReactNode[] = [];
@@ -433,7 +482,12 @@ function buildToolRender(
         {title}
       </span>
       <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-        {subtitle ? <span>{subtitle}</span> : null}
+        {commandSummary ? (
+          <span className="inline-flex min-w-0 max-w-full items-center gap-1 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600">
+            <span className="truncate font-mono">{commandSummary}</span>
+          </span>
+        ) : null}
+        {subtitle ? <span className="min-w-0 truncate">{subtitle}</span> : null}
         <span
           className={cn(
             "inline-flex items-center rounded-full border px-1.5 py-0.5 font-semibold leading-none",
