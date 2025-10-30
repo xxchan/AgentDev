@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useId, type ChangeEvent } fr
 import { HelpCircle } from 'lucide-react';
 import MainLayout from '@/components/layout/MainLayout';
 import SessionDetailModeToggle from '@/components/SessionDetailModeToggle';
-import SessionListView, { SessionListItem, SessionListMessage } from '@/components/SessionListView';
+import SessionListView, { SessionListItem } from '@/components/SessionListView';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Tooltip,
@@ -13,15 +13,16 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useSessions } from '@/hooks/useSessions';
-import { useSessionDetailMode } from '@/hooks/useSessionDetailMode';
-import { useSessionDetails } from '@/hooks/useSessionDetails';
+import { useSessionDetailMode } from '@/features/sessions/hooks/useSessionDetailMode';
+import { useSessionDetails } from '@/features/sessions/hooks/useSessionDetails';
 import {
   SessionDetailMode,
   SessionProviderSummary,
   SessionSummary,
 } from '@/types';
 import { cn } from '@/lib/utils';
-import { buildUserOnlyMessages, getSessionKey, toSessionListMessages } from '@/lib/session-utils';
+import { getSessionKey } from '@/lib/session-utils';
+import { buildSessionListItem } from '@/features/sessions/utils/buildSessionListItem';
 import { getProviderBadgeClasses } from '@/lib/providers';
 import { queryKeys } from '@/lib/queryKeys';
 
@@ -1181,13 +1182,16 @@ export default function SessionsPage() {
     }
 
     const metadataParts = buildMetadataParts(selectedSession);
-    const sessionKey = getSessionKey(selectedSession);
-    let messageItems: SessionListMessage[] =
-      detailMode === 'full'
-        ? toSessionListMessages(detailResponse?.events ?? [], sessionKey, 'full')
-        : detailMode === 'conversation'
-          ? toSessionListMessages(detailResponse?.events ?? [], sessionKey, 'conversation')
-          : buildUserOnlyMessages(selectedSession, detailResponse);
+    const metadata =
+      metadataParts.length > 0 ? (
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          {metadataParts.map((line) => (
+            <span key={line} className="text-xs text-gray-600">
+              {line}
+            </span>
+          ))}
+        </div>
+      ) : undefined;
 
     const needsFetch =
       detailMode === 'full'
@@ -1198,77 +1202,15 @@ export default function SessionsPage() {
 
     const shouldShowDetailLoading = needsFetch || detailLoading;
 
-    if (detailMode === 'user_only') {
-      const shownUserMessages = messageItems.filter(
-        (item) => (item.detail.actor ?? '').toLowerCase() === 'user',
-      ).length;
-
-      if (previewTruncated && shownUserMessages < selectedSession.user_message_count) {
-        messageItems = [
-          ...messageItems,
-          {
-            key: `${sessionKey}-preview-note`,
-            detail: {
-              actor: 'system',
-              category: 'session_meta',
-              label: 'Preview',
-              text: `Showing ${shownUserMessages} of ${selectedSession.user_message_count} user messages.`,
-              summary_text: 'Showing limited user messages',
-              data: null,
-            },
-          },
-        ];
-      }
-
-      if (detailError) {
-        messageItems = [
-          ...messageItems,
-          {
-            key: `${sessionKey}-error`,
-            detail: {
-              actor: 'system',
-              category: 'session_meta',
-              label: 'Error',
-              text: `Failed to load transcript: ${detailError}`,
-              summary_text: `Failed to load transcript: ${detailError}`,
-              data: null,
-            },
-          },
-        ];
-      } else if (shouldShowDetailLoading) {
-        messageItems = [
-          ...messageItems,
-          {
-            key: `${sessionKey}-loading`,
-            detail: {
-              actor: 'system',
-              category: 'session_meta',
-              label: 'Loading',
-              text: 'Loading full user transcript…',
-              summary_text: 'Loading full transcript…',
-              data: null,
-            },
-          },
-        ];
-      }
-    }
-
-    const item: SessionListItem = {
-      sessionKey: getSessionKey(selectedSession),
-      provider: selectedSession.provider,
-      sessionId: selectedSession.session_id,
-      lastTimestamp: selectedSession.last_timestamp,
-      messages: messageItems,
-      metadata:
-        metadataParts.length > 0 ? (
-          <div className="flex flex-wrap gap-x-4 gap-y-1">
-            {metadataParts.map((line) => (
-              <span key={line} className="text-xs text-gray-600">
-                {line}
-              </span>
-            ))}
-          </div>
-        ) : undefined,
+    const item = buildSessionListItem({
+      session: selectedSession,
+      detailMode,
+      detailResponse,
+      detailError,
+      showDetailLoading: detailMode === 'user_only' ? false : shouldShowDetailLoading,
+      previewTruncated,
+      showUserOnlyLoading: detailMode === 'user_only' ? shouldShowDetailLoading : false,
+      metadata,
       headerActions: (
         <button
           type="button"
@@ -1279,31 +1221,7 @@ export default function SessionsPage() {
           Resume (soon)
         </button>
       ),
-    };
-
-    if (detailMode === 'full' || detailMode === 'conversation') {
-      if (detailError) {
-        item.emptyState = (
-          <div className="text-xs text-destructive">
-            Failed to load transcript: {detailError}
-          </div>
-        );
-      } else if (needsFetch || detailLoading) {
-        item.emptyState = (
-          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary" />
-            Loading transcript…
-          </div>
-        );
-      } else if (messageItems.length === 0) {
-        item.emptyState =
-          detailMode === 'conversation'
-            ? 'No conversation messages found.'
-            : 'No transcript entries found.';
-      }
-    } else if (messageItems.filter((entry) => (entry.detail.actor ?? '').toLowerCase() === 'user').length === 0) {
-      item.emptyState = 'No user messages recorded.';
-    }
+    });
 
     return [item];
   }, [

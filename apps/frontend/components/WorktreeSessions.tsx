@@ -2,14 +2,10 @@
 
 import { useEffect } from "react";
 import SessionDetailModeToggle from "@/components/SessionDetailModeToggle";
-import SessionListView, { SessionListItem, SessionListMessage } from "@/components/SessionListView";
-import { useSessionDetailMode } from "@/hooks/useSessionDetailMode";
-import { useSessionDetails } from "@/hooks/useSessionDetails";
-import {
-  buildUserOnlyMessages,
-  getSessionKey,
-  toSessionListMessages,
-} from "@/lib/session-utils";
+import SessionListView, { SessionListItem } from "@/components/SessionListView";
+import { useSessionDetailMode } from "@/features/sessions/hooks/useSessionDetailMode";
+import { useSessionDetails } from "@/features/sessions/hooks/useSessionDetails";
+import { buildSessionListItem } from "@/features/sessions/utils/buildSessionListItem";
 import { WorktreeSessionSummary } from "@/types";
 
 interface WorktreeSessionsProps {
@@ -50,7 +46,6 @@ export default function WorktreeSessions({
   }, [detailMode, getDetail, isFetching, requestDetail, sessions]);
 
   const sessionItems: SessionListItem[] = sessions.map((session) => {
-    const sessionKey = getSessionKey(session);
     const baseArgs = {
       provider: session.provider,
       sessionId: session.session_id,
@@ -75,30 +70,12 @@ export default function WorktreeSessions({
     const previewTruncated =
       session.user_message_count > session.user_messages_preview.length;
 
-    const activeDetail =
+    const detailResponse =
       detailMode === "full"
         ? fullDetail
         : detailMode === "conversation"
           ? conversationDetail
           : userOnlyDetail ?? fullDetail ?? null;
-
-    let messages: SessionListMessage[] =
-      detailMode === "full"
-        ? toSessionListMessages(activeDetail?.events ?? [], sessionKey, "full")
-        : detailMode === "conversation"
-          ? toSessionListMessages(
-              activeDetail?.events ?? [],
-              sessionKey,
-              "conversation",
-            )
-          : buildUserOnlyMessages(session, activeDetail ?? undefined);
-
-    const needsFetch =
-      detailMode === "full"
-        ? !fullDetail
-        : detailMode === "conversation"
-          ? !conversationDetail
-          : false;
 
     const detailError =
       detailMode === "full"
@@ -106,6 +83,13 @@ export default function WorktreeSessions({
         : detailMode === "conversation"
           ? conversationError
           : userOnlyError;
+
+    const needsFetch =
+      detailMode === "full"
+        ? !fullDetail
+        : detailMode === "conversation"
+          ? !conversationDetail
+          : false;
 
     const detailLoading =
       detailMode === "full"
@@ -116,37 +100,24 @@ export default function WorktreeSessions({
             ? userOnlyFetching
             : false;
 
-    if (detailMode === "user_only") {
-      const shownUserMessages = messages.filter(
-        (entry) => (entry.detail.actor ?? "").toLowerCase() === "user",
-      ).length;
-      const isTruncated =
-        previewTruncated && shownUserMessages < session.user_message_count;
+    const showDetailLoading =
+      detailMode === "user_only" ? false : needsFetch || detailLoading;
 
-      if (isTruncated) {
-        messages = [
-          ...messages,
-          {
-            key: `${sessionKey}-preview-note`,
-            detail: {
-              actor: "system",
-              category: "session_meta",
-              label: "Preview",
-              text: `Showing ${shownUserMessages} of ${session.user_message_count} user messages.`,
-              summary_text: "Showing limited user messages",
-              data: null,
-            },
-          },
-        ];
-      }
-    }
+    const showUserOnlyLoading =
+      detailMode === "user_only"
+        ? previewTruncated && !fullDetail
+          ? userOnlyFetching
+          : false
+        : false;
 
-    const item: SessionListItem = {
-      sessionKey,
-      provider: session.provider,
-      sessionId: session.session_id,
-      lastTimestamp: session.last_timestamp,
-      messages,
+    return buildSessionListItem({
+      session,
+      detailMode,
+      detailResponse,
+      detailError,
+      showDetailLoading,
+      previewTruncated,
+      showUserOnlyLoading,
       headerActions: (
         <button
           type="button"
@@ -157,31 +128,7 @@ export default function WorktreeSessions({
           Resume (soon)
         </button>
       ),
-    };
-
-    if (detailMode !== "user_only") {
-      if (detailError) {
-        item.emptyState = (
-          <div className="text-xs text-destructive">
-            Failed to load transcript: {detailError}
-          </div>
-        );
-      } else if (needsFetch || detailLoading) {
-        item.emptyState = (
-          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary" />
-            Loading transcript…
-          </div>
-        );
-      } else if (messages.length === 0) {
-        item.emptyState =
-          detailMode === "conversation"
-            ? "No conversation messages found."
-            : "No transcript entries found.";
-      }
-    }
-
-    return item;
+    });
   });
 
   return (
