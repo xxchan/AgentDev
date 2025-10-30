@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Error, Result, anyhow};
 use axum::{
     Json,
     extract::{Path as AxumPath, Query},
@@ -15,7 +15,10 @@ use std::thread;
 use std::time::Instant;
 
 use crate::{
-    discovery::{DiscoveryOptions, discover_worktrees as discover_unmanaged_worktrees},
+    discovery::{
+        DiscoveryOptions, add_discovered_to_state,
+        discover_worktrees as discover_unmanaged_worktrees,
+    },
     git::{
         CommitsAhead, HeadCommitInfo, WorktreeGitStatus, collect_worktree_diff_breakdown,
         commits_since_merge_base, head_commit_info, summarize_worktree_status,
@@ -832,7 +835,9 @@ pub async fn get_worktree_discovery(
     };
 
     match tokio::task::spawn_blocking(move || {
-        discover_unmanaged_worktrees(DiscoveryOptions { recursive, root })
+        let discovered = discover_unmanaged_worktrees(DiscoveryOptions { recursive, root })?;
+        let _ = add_discovered_to_state(&discovered)?;
+        Ok::<_, Error>(discovered)
     })
     .await
     {

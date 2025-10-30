@@ -406,9 +406,14 @@ fn test_discovery_lists_unmanaged_worktrees() {
 
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
     let redacted = ctx.redact_paths(&stdout);
-    assert!(redacted.contains("Discovered unmanaged git worktrees"));
+    assert!(redacted.contains("Discovered git worktrees (now managed)"));
     assert!(redacted.contains("/tmp/TEST_DIR/test-repo-manual-discovery"));
     assert!(redacted.contains("Branch: manual-branch"));
+    assert!(redacted.contains("Registered 1 worktree"));
+
+    let state = ctx.read_state();
+    let worktrees = state["worktrees"].as_object().expect("worktrees map");
+    assert!(worktrees.contains_key("test-repo/manual-branch"));
 }
 
 #[test]
@@ -454,6 +459,10 @@ fn test_discovery_json_output() {
     );
 
     assert_eq!(discovered_paths, vec![expected]);
+
+    let state = ctx.read_state();
+    let worktrees = state["worktrees"].as_object().expect("worktrees map");
+    assert!(worktrees.contains_key("test-repo/json-branch"));
 }
 
 #[test]
@@ -509,6 +518,10 @@ fn test_discovery_recursive_finds_nested_repo() {
     );
 
     assert!(paths.contains(&expected));
+
+    let state = ctx.read_state();
+    let worktrees = state["worktrees"].as_object().expect("worktrees map");
+    assert!(worktrees.contains_key("nested/nested-branch"));
 }
 
 #[test]

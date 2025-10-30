@@ -1,11 +1,13 @@
 use anyhow::{Context, Result, anyhow};
+use chrono::Utc;
 use serde::Serialize;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::git::execute_git;
-use crate::state::XlaudeState;
+use crate::state::{WorktreeInfo, XlaudeState};
+use crate::utils::sanitize_branch_name;
 
 pub const MAX_RECURSIVE_DEPTH: usize = 6;
 pub const MAX_REPOS_DISCOVERED: usize = 64;
@@ -74,6 +76,81 @@ pub fn discover_worktrees(options: DiscoveryOptions) -> Result<Vec<DiscoveredWor
     });
 
     Ok(discovered)
+}
+
+/// Persist discovered worktrees into xlaude/agentdev state, assigning
+/// reasonable names for each newly tracked worktree.
+///
+/// Returns the list of worktree infos that were newly added (in the same
+/// order as `entries` were provided). Existing managed worktrees are skipped.
+pub fn add_discovered_to_state(entries: &[DiscoveredWorktree]) -> Result<Vec<WorktreeInfo>> {
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut state = XlaudeState::load()?;
+    let mut added: Vec<WorktreeInfo> = Vec::new();
+
+    let mut existing_paths: HashMap<String, String> = HashMap::new();
+    for (key, info) in &state.worktrees {
+        let canonical = canonical_string(&info.path)?;
+        existing_paths.insert(canonical, key.clone());
+    }
+
+    for entry in entries {
+        let path = PathBuf::from(&entry.path);
+        if !path.exists() {
+            continue;
+        }
+
+        let canonical = canonical_string(&path)?;
+        if existing_paths.contains_key(&canonical) {
+            continue;
+        }
+
+        let repo_path = PathBuf::from(&entry.repo);
+        let repo_name = repo_path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| repo_path.display().to_string());
+
+        let desired_name = entry
+            .branch
+            .as_deref()
+            .map(sanitize_branch_name)
+            .or_else(|| {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(sanitize_branch_name)
+            })
+            .unwrap_or_else(|| format!("worktree-{}", state.worktrees.len() + 1));
+
+        let final_name = ensure_unique_name(&state, &repo_name, desired_name);
+        let key = XlaudeState::make_key(&repo_name, &final_name);
+
+        let info = WorktreeInfo {
+            name: final_name.clone(),
+            branch: entry.branch.clone().unwrap_or_else(|| final_name.clone()),
+            path: path.clone(),
+            repo_name: repo_name.clone(),
+            created_at: Utc::now(),
+            task_id: None,
+            task_name: None,
+            initial_prompt: None,
+            agent_alias: None,
+        };
+
+        state.worktrees.insert(key.clone(), info.clone());
+        existing_paths.insert(canonical, key);
+        added.push(info);
+    }
+
+    if !added.is_empty() {
+        state.save()?;
+    }
+
+    Ok(added)
 }
 
 fn resolve_repo_root(start: &Path) -> Result<PathBuf> {
@@ -324,4 +401,18 @@ fn is_git_repo_root(path: &Path) -> bool {
     }
 
     path.join("HEAD").exists() && path.join("config").exists()
+}
+
+fn ensure_unique_name(state: &XlaudeState, repo_name: &str, desired: String) -> String {
+    let mut name = desired;
+    let mut counter = 2;
+
+    loop {
+        let key = XlaudeState::make_key(repo_name, &name);
+        if !state.worktrees.contains_key(&key) {
+            return name;
+        }
+        name = format!("{name}-{counter}");
+        counter += 1;
+    }
 }

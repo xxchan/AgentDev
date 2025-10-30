@@ -1,4 +1,7 @@
-use agentdev::discovery::{DiscoveredWorktree, DiscoveryOptions, discover_worktrees};
+use agentdev::discovery::{
+    DiscoveredWorktree, DiscoveryOptions, add_discovered_to_state, discover_worktrees,
+};
+use agentdev::state::WorktreeInfo;
 use anyhow::Result;
 use colored::Colorize;
 
@@ -9,6 +12,7 @@ pub fn handle_discovery(recursive: bool, json: bool) -> Result<()> {
     };
 
     let discovered = discover_worktrees(options)?;
+    let newly_added = add_discovered_to_state(&discovered)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&discovered)?);
@@ -17,10 +21,11 @@ pub fn handle_discovery(recursive: bool, json: bool) -> Result<()> {
 
     if discovered.is_empty() {
         println!("{} No unmanaged git worktrees found", "📭".yellow());
+        print_persistence_summary(&newly_added);
         return Ok(());
     }
 
-    println!("{} Discovered unmanaged git worktrees:\n", "📂".cyan());
+    println!("{} Discovered git worktrees (now managed):\n", "📂".cyan());
 
     let mut current_repo: Option<&str> = None;
     for entry in &discovered {
@@ -36,11 +41,7 @@ pub fn handle_discovery(recursive: bool, json: bool) -> Result<()> {
     }
 
     println!();
-    println!(
-        "{} Use {} to add a worktree under management.",
-        "💡".cyan(),
-        "agentdev worktree add".bold()
-    );
+    print_persistence_summary(&newly_added);
 
     Ok(())
 }
@@ -61,5 +62,29 @@ fn print_entry(entry: &DiscoveredWorktree) {
     }
     if let Some(prunable) = &entry.prunable {
         println!("      Prunable: {}", prunable);
+    }
+}
+
+fn print_persistence_summary(added: &[WorktreeInfo]) {
+    if added.is_empty() {
+        println!(
+            "{} All discovered worktrees were already managed.",
+            "ℹ️".blue()
+        );
+        return;
+    }
+
+    println!(
+        "{} Registered {} worktree(s) with agentdev:",
+        "✅".green(),
+        added.len()
+    );
+    for info in added {
+        println!(
+            "  • {}/{} ({})",
+            info.repo_name,
+            info.name,
+            info.path.display()
+        );
     }
 }
