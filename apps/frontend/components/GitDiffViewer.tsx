@@ -117,7 +117,14 @@ const GitDiffViewer = forwardRef<GitDiffViewerHandle, GitDiffViewerProps>(
     },
     ref,
   ) => {
-    const hasDiff = diffText.trim().length > 0;
+    const normalizedDiffText = useMemo(() => {
+      if (!diffText) {
+        return '';
+      }
+      return diffText.endsWith('\n') ? diffText : `${diffText}\n`;
+    }, [diffText]);
+
+    const hasDiff = normalizedDiffText.trim().length > 0;
     const isModeControlled = mode !== undefined;
     const isWrapControlled = wrap !== undefined;
     const [modeState, setModeState] = useState<DiffModeEnum>(() => {
@@ -134,7 +141,7 @@ const GitDiffViewer = forwardRef<GitDiffViewerHandle, GitDiffViewerProps>(
     });
     const diffViewRef = useRef<DiffViewHandle | null>(null);
 
-    const parsedPaths = useMemo(() => parseDiffPaths(diffText, filePath), [diffText, filePath]);
+    const parsedPaths = useMemo(() => parseDiffPaths(normalizedDiffText, filePath), [normalizedDiffText, filePath]);
 
     const diffData = useMemo(() => {
       if (!hasDiff) return null;
@@ -147,9 +154,9 @@ const GitDiffViewer = forwardRef<GitDiffViewerHandle, GitDiffViewerProps>(
           fileName: parsedPaths.newPath ?? parsedPaths.label,
           content: '',
         },
-        hunks: [diffText],
+        hunks: [normalizedDiffText],
       };
-    }, [diffText, hasDiff, parsedPaths.label, parsedPaths.newPath, parsedPaths.oldPath]);
+    }, [hasDiff, normalizedDiffText, parsedPaths.label, parsedPaths.newPath, parsedPaths.oldPath]);
 
     const statusInfo = useMemo(() => (showHeader ? normaliseStatus(status) : { code: null, label: null }), [status, showHeader]);
 
@@ -210,7 +217,7 @@ const GitDiffViewer = forwardRef<GitDiffViewerHandle, GitDiffViewerProps>(
       const raf = window.requestAnimationFrame(() => expandAll('both'));
 
       return () => window.cancelAnimationFrame(raf);
-    }, [autoExpand, expandAll, hasDiff, diffText]);
+    }, [autoExpand, expandAll, hasDiff, normalizedDiffText]);
 
     useEffect(() => {
       if (mode !== undefined) {

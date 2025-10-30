@@ -18,11 +18,11 @@ type GitDiffSection = {
 };
 
 function splitGitDiffByFile(diffText: string): GitDiffSection[] {
-  const trimmed = diffText.trim();
-  if (!trimmed) {
+  if (!diffText.trim()) {
     return [];
   }
-  const lines = trimmed.split('\n');
+  const normalized = diffText.trimStart();
+  const lines = normalized.split('\n');
   const sections: GitDiffSection[] = [];
   let current: string[] = [];
 
