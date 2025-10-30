@@ -9,8 +9,8 @@ mod input;
 
 use commands::{
     MergeStrategy, handle_add, handle_clean, handle_create, handle_delete, handle_delete_task_cli,
-    handle_dir, handle_exec, handle_list, handle_merge, handle_open, handle_rename,
-    handle_sessions_list, handle_start, handle_ui,
+    handle_dir, handle_discovery, handle_exec, handle_list, handle_merge, handle_open,
+    handle_rename, handle_sessions_list, handle_start, handle_ui,
 };
 
 #[derive(Parser)]
@@ -151,6 +151,7 @@ fn main() -> Result<()> {
             WorktreeCommands::Clean => handle_clean(),
             WorktreeCommands::Dir { name } => handle_dir(name),
             WorktreeCommands::Exec { worktree, command } => handle_exec(worktree, command),
+            WorktreeCommands::Discovery { recursive, json } => handle_discovery(recursive, json),
             WorktreeCommands::Merge {
                 name,
                 push,
@@ -246,6 +247,15 @@ enum WorktreeCommands {
         /// Command to execute inside the worktree
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
+    },
+    /// Discover unmanaged git worktrees
+    Discovery {
+        /// Recursively search subdirectories for git repositories
+        #[arg(long)]
+        recursive: bool,
+        /// Output results as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Merge a worktree branch into the default branch
     Merge {

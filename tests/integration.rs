@@ -368,6 +368,150 @@ fn test_exec_parses_single_argument_command() {
 }
 
 #[test]
+fn test_discovery_no_unmanaged_worktrees() {
+    let ctx = TestContext::new("test-repo");
+
+    let output = ctx.xlaude(&["worktree", "discovery"]).assert().success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    assert!(
+        stdout.contains("No unmanaged git worktrees found"),
+        "expected no unmanaged worktrees message, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_discovery_lists_unmanaged_worktrees() {
+    let ctx = TestContext::new("test-repo");
+
+    ctx.xlaude(&["worktree", "create", "managed"])
+        .assert()
+        .success();
+
+    let manual_path = ctx.temp_dir.path().join("test-repo-manual-discovery");
+    let manual_path_str = manual_path.to_string_lossy().to_string();
+
+    let status = std::process::Command::new("git")
+        .args(["worktree", "add", "-b", "manual-branch", &manual_path_str])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "failed to create manual worktree: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let output = ctx.xlaude(&["worktree", "discovery"]).assert().success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let redacted = ctx.redact_paths(&stdout);
+    assert!(redacted.contains("Discovered unmanaged git worktrees"));
+    assert!(redacted.contains("/tmp/TEST_DIR/test-repo-manual-discovery"));
+    assert!(redacted.contains("Branch: manual-branch"));
+}
+
+#[test]
+fn test_discovery_json_output() {
+    let ctx = TestContext::new("test-repo");
+
+    let manual_path = ctx.temp_dir.path().join("test-repo-json-discovery");
+    let manual_path_str = manual_path.to_string_lossy().to_string();
+
+    let status = std::process::Command::new("git")
+        .args(["worktree", "add", "-b", "json-branch", &manual_path_str])
+        .current_dir(&ctx.repo_dir)
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "failed to create manual worktree: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let output = ctx
+        .xlaude(&["worktree", "discovery", "--json"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let array = value.as_array().expect("discovery JSON should be an array");
+
+    let discovered_paths: Vec<String> = array
+        .iter()
+        .filter_map(|entry| entry.get("path"))
+        .filter_map(|path| path.as_str())
+        .map(|path| ctx.redact_paths(path))
+        .collect();
+
+    let expected = ctx.redact_paths(
+        manual_path
+            .canonicalize()
+            .unwrap_or_else(|_| manual_path.clone())
+            .to_string_lossy()
+            .as_ref(),
+    );
+
+    assert_eq!(discovered_paths, vec![expected]);
+}
+
+#[test]
+fn test_discovery_recursive_finds_nested_repo() {
+    let ctx = TestContext::new("root-repo");
+
+    let nested_repo = ctx.repo_dir.join("nested");
+    fs::create_dir_all(&nested_repo).unwrap();
+    TestContext::init_test_repo(&nested_repo);
+
+    let nested_worktree = ctx.temp_dir.path().join("nested-manual-discovery");
+    let nested_worktree_str = nested_worktree.to_string_lossy().to_string();
+
+    let status = std::process::Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "nested-branch",
+            &nested_worktree_str,
+        ])
+        .current_dir(&nested_repo)
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "failed to create nested manual worktree: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let output = ctx
+        .xlaude(&["worktree", "discovery", "--recursive", "--json"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let array = value.as_array().expect("discovery JSON should be an array");
+
+    let paths: Vec<String> = array
+        .iter()
+        .filter_map(|entry| entry.get("path"))
+        .filter_map(|path| path.as_str())
+        .map(|path| ctx.redact_paths(path))
+        .collect();
+
+    let expected = ctx.redact_paths(
+        nested_worktree
+            .canonicalize()
+            .unwrap_or_else(|_| nested_worktree.clone())
+            .to_string_lossy()
+            .as_ref(),
+    );
+
+    assert!(paths.contains(&expected));
+}
+
+#[test]
 fn test_create_on_wrong_branch() {
     let ctx = TestContext::new("test-repo");
 

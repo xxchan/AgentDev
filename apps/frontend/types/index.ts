@@ -153,6 +153,16 @@ export interface WorktreeProcessListResponse {
   processes: WorktreeProcessSummary[];
 }
 
+export interface DiscoveredWorktree {
+  repo: string;
+  path: string;
+  branch?: string | null;
+  head?: string | null;
+  locked?: string | null;
+  prunable?: string | null;
+  bare: boolean;
+}
+
 export interface LaunchWorktreeCommandResponse {
   process: WorktreeProcessSummary;
 }

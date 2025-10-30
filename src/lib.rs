@@ -2,6 +2,7 @@
 pub mod claude;
 pub mod claude_status;
 pub mod config;
+pub mod discovery;
 pub mod git;
 pub mod process_registry;
 pub mod sessions;
@@ -12,6 +13,7 @@ pub mod web;
 
 // Re-export commonly used types and functions
 pub use config::{load_agent_config, split_cmdline};
+pub use discovery::{DiscoveredWorktree, DiscoveryOptions, discover_worktrees};
 pub use git::{execute_git, get_diff_for_path, get_repo_name, update_submodules};
 pub use state::{WorktreeInfo, XlaudeState};
 pub use tmux::TmuxManager;

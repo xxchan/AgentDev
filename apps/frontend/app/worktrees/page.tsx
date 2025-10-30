@@ -5,11 +5,19 @@ import MainLayout from '@/components/layout/MainLayout';
 import WorktreeList from '@/components/WorktreeList';
 import WorktreeDetails from '@/components/WorktreeDetails';
 import WorktreeProcesses from '@/components/WorktreeProcesses';
+import { useDiscoveredWorktrees } from '@/hooks/useDiscoveredWorktrees';
 import { useWorktrees } from '@/hooks/useWorktrees';
 import { WorktreeSummary } from '@/types';
 
 export default function WorktreesPage() {
   const { worktrees, isLoading } = useWorktrees();
+  const {
+    worktrees: discoveredWorktrees,
+    isLoading: isDiscoveryLoading,
+    isFetching: isDiscoveryFetching,
+    error: discoveryError,
+    refetch: refetchDiscovery,
+  } = useDiscoveredWorktrees(true);
   const [selectedWorktreeId, setSelectedWorktreeId] = useState<string | null>(
     null,
   );
@@ -40,6 +48,14 @@ export default function WorktreesPage() {
           isLoading={isLoading}
           selectedId={selectedWorktreeId}
           onSelect={setSelectedWorktreeId}
+          discoveredWorktrees={discoveredWorktrees}
+          isDiscoveryLoading={
+            isDiscoveryLoading || isDiscoveryFetching
+          }
+          discoveryError={discoveryError}
+          onRefreshDiscovery={() => {
+            void refetchDiscovery();
+          }}
         />
       }
       main={

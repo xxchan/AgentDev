@@ -15,6 +15,7 @@ use std::thread;
 use std::time::Instant;
 
 use crate::{
+    discovery::{DiscoveryOptions, discover_worktrees as discover_unmanaged_worktrees},
     git::{
         CommitsAhead, HeadCommitInfo, WorktreeGitStatus, collect_worktree_diff_breakdown,
         commits_since_merge_base, head_commit_info, summarize_worktree_status,
@@ -136,6 +137,12 @@ pub struct WorktreeProcessSummary {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorktreeProcessListResponse {
     pub processes: Vec<WorktreeProcessSummary>,
+}
+
+#[derive(Deserialize)]
+pub struct WorktreeDiscoveryQuery {
+    #[serde(default)]
+    pub recursive: Option<bool>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -786,6 +793,33 @@ pub async fn get_worktrees() -> impl IntoResponse {
         Err(join_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Worktree collection task failed: {join_err}"),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/worktrees/discovery - List unmanaged git worktrees
+pub async fn get_worktree_discovery(
+    Query(query): Query<WorktreeDiscoveryQuery>,
+) -> impl IntoResponse {
+    let recursive = query.recursive.unwrap_or(true);
+    match tokio::task::spawn_blocking(move || {
+        discover_unmanaged_worktrees(DiscoveryOptions {
+            recursive,
+            root: None,
+        })
+    })
+    .await
+    {
+        Ok(Ok(discovered)) => Json(discovered).into_response(),
+        Ok(Err(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to discover git worktrees: {err}"),
+        )
+            .into_response(),
+        Err(join_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Worktree discovery task failed: {join_err}"),
         )
             .into_response(),
     }

@@ -144,6 +144,7 @@ fn build_router() -> Router {
         )
         .route("/api/sessions", get(get_sessions))
         .route("/api/worktrees", get(get_worktrees))
+        .route("/api/worktrees/discovery", get(get_worktree_discovery))
         .route("/api/worktrees/:worktree_id", get(get_worktree))
         .route(
             "/api/worktrees/:worktree_id/git",
