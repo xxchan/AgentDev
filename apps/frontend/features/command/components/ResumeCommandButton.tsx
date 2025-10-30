@@ -10,6 +10,7 @@ interface ResumeCommandButtonProps {
   provider: string;
   sessionId: string;
   worktreeId?: string | null;
+  workingDir?: string | null;
   className?: string;
 }
 
@@ -51,6 +52,7 @@ export default function ResumeCommandButton({
   provider,
   sessionId,
   worktreeId,
+  workingDir,
   className,
 }: ResumeCommandButtonProps) {
   const [state, setState] = useState<ActionState>({ kind: 'idle' });
@@ -59,7 +61,11 @@ export default function ResumeCommandButton({
 
   const command = useMemo(() => resolveResumeCommand(provider, sessionId), [provider, sessionId]);
   const canResume = Boolean(command);
-  const canLaunch = Boolean(canResume && worktreeId);
+  const normalizedWorktreeId = useMemo(() => (worktreeId ?? '').trim(), [worktreeId]);
+  const normalizedWorkingDir = useMemo(() => (workingDir ?? '').trim(), [workingDir]);
+  const canLaunchFromWorktree = normalizedWorktreeId.length > 0;
+  const canLaunchFromDirectory = normalizedWorkingDir.length > 0;
+  const canLaunch = Boolean(canResume && (canLaunchFromWorktree || canLaunchFromDirectory));
   const isBusy = state.kind === 'copying' || state.kind === 'launching';
 
   useEffect(() => {
@@ -84,16 +90,25 @@ export default function ResumeCommandButton({
   }, []);
 
   const launchResume = useCallback(async () => {
-    if (!command || !worktreeId) {
+    if (!command || (!canLaunchFromWorktree && !canLaunchFromDirectory)) {
       return;
     }
 
     setState({ kind: 'launching' });
     try {
-      await launchShell({
-        worktreeId,
-        command,
-      });
+      if (canLaunchFromWorktree) {
+        await launchShell({
+          type: 'worktree',
+          worktreeId: normalizedWorktreeId,
+          command,
+        });
+      } else {
+        await launchShell({
+          type: 'directory',
+          workingDir: normalizedWorkingDir,
+          command,
+        });
+      }
       setState({ kind: 'launch-success' });
     } catch (error) {
       console.error('Failed to launch resume command', error);
@@ -102,7 +117,7 @@ export default function ResumeCommandButton({
         message: toErrorMessage(error),
       });
     }
-  }, [command, launchShell, worktreeId]);
+  }, [canLaunchFromDirectory, canLaunchFromWorktree, command, launchShell, normalizedWorktreeId, normalizedWorkingDir]);
 
   const copyCommand = useCallback(async () => {
     if (!command) {
@@ -172,13 +187,17 @@ export default function ResumeCommandButton({
       if (errorMessage) {
         return `Failed to launch: ${errorMessage}`;
       }
-      return `Launch "${command}" in a shell rooted at this worktree`;
+      if (canLaunchFromWorktree) {
+        return `Launch "${command}" in a shell rooted at this worktree`;
+      }
+      const target = normalizedWorkingDir || 'the session directory';
+      return `Launch "${command}" in a shell rooted at ${target}`;
     }
     if (errorMessage) {
       return `Failed to copy: ${errorMessage}`;
     }
     return `Copy "${command}" to your clipboard`;
-  }, [canLaunch, canResume, command, errorMessage, provider]);
+  }, [canLaunch, canLaunchFromWorktree, canResume, command, errorMessage, normalizedWorkingDir, provider]);
 
   const icon = useMemo(() => {
     if (!canResume) {

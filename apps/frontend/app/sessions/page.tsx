@@ -1217,6 +1217,7 @@ export default function SessionsPage() {
           provider={selectedSession.provider}
           sessionId={selectedSession.session_id}
           worktreeId={selectedSession.worktree_id ?? undefined}
+          workingDir={selectedSession.working_dir ?? undefined}
         />
       ),
     });

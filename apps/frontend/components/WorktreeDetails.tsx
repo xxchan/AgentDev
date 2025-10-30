@@ -331,6 +331,7 @@ export default function WorktreeDetails({
 
     try {
       await launchWorktreeShell({
+        type: 'worktree',
         worktreeId,
       });
       setActionFeedback({
@@ -376,6 +377,7 @@ export default function WorktreeDetails({
 
     try {
       await launchWorktreeShell({
+        type: 'worktree',
         worktreeId: worktree.id,
         command: trimmed,
       });

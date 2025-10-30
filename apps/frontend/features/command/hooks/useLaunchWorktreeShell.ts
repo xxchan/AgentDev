@@ -8,21 +8,33 @@ interface LaunchWorktreeShellRequest {
   command?: string;
 }
 
-export interface LaunchWorktreeShellInput extends LaunchWorktreeShellRequest {
-  worktreeId: string;
+interface LaunchDirectoryShellRequest extends LaunchWorktreeShellRequest {
+  path: string;
 }
+
+export type LaunchWorktreeShellInput =
+  | ({ type: 'worktree'; worktreeId: string } & LaunchWorktreeShellRequest)
+  | ({ type: 'directory'; workingDir: string } & LaunchWorktreeShellRequest);
 
 export function useLaunchWorktreeShell() {
   return useMutation({
-    mutationFn: async ({ worktreeId, command }: LaunchWorktreeShellInput) => {
-      const payload: LaunchWorktreeShellRequest = command
-        ? { command }
-        : {};
-      return postJson<LaunchWorktreeShellResponse, LaunchWorktreeShellRequest>(
-        `/api/worktrees/${encodeURIComponent(worktreeId)}/shell`,
+    mutationFn: async (input: LaunchWorktreeShellInput) => {
+      if (input.type === 'worktree') {
+        const payload: LaunchWorktreeShellRequest = input.command ? { command: input.command } : {};
+        return postJson<LaunchWorktreeShellResponse, LaunchWorktreeShellRequest>(
+          `/api/worktrees/${encodeURIComponent(input.worktreeId)}/shell`,
+          payload,
+        );
+      }
+
+      const payload: LaunchDirectoryShellRequest = {
+        path: input.workingDir,
+        ...(input.command ? { command: input.command } : {}),
+      };
+      return postJson<LaunchWorktreeShellResponse, LaunchDirectoryShellRequest>(
+        '/api/shell',
         payload,
       );
     },
   });
 }
-
