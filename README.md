@@ -20,7 +20,25 @@ cargo install --git https://github.com/xxchan/AgentDev agentdev
 
 ## 使用
 
-- 启动一个任务（并行多 Agent）
+### UI
+
+- /sessions 页面: 查看本地所有 agent sessions（不依赖）
+- /worktrees 页面: 查看 agentdev 管理的 worktrees 里的 agent sessions / git diff
+
+### Worktree-driven local parallel development
+
+```bash
+# create a worktree, and start an agent task
+agentdev wt create
+
+# Run a command in a worktree, e.g., `pnpm dev`, `code .`
+agentdev wt exec <cmd>
+
+# Merge worktree into main / delete worktree
+agentdev wt [merge|delete] <worktree>
+```
+
+### 并行多 Agent 赛马（TODO）
 
 ```bash
 agentdev start "研究一下这个项目，把介绍写到一个文件里"
@@ -42,8 +60,3 @@ Sessions 页面支持对比分支、查看 git diff、发 follow-up prompt。`ag
 ```bash
 agentdev delete-task <task>
 ```
-
-## UI
-
-- /sessions 页面: 查看本地所有 agent sessions（不依赖）
-- /worktrees 页面: 查看 agentdev 管理的 worktrees 里的 agent sessions / git diff
