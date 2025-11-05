@@ -5,11 +5,16 @@ import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
 } from 'react';
 import clsx from 'clsx';
-import type { MergeStrategyOption, WorktreeSummary } from '@/types';
+import type {
+  MergeStrategyOption,
+  WorktreeSessionSummary,
+  WorktreeSummary,
+} from '@/types';
 import WorktreeGitSection from './WorktreeGitSection';
 import WorktreeSessions from './WorktreeSessions';
 import { useLaunchWorktreeCommand } from '@/features/command/hooks/useLaunchWorktreeCommand';
@@ -17,6 +22,7 @@ import { useLaunchWorktreeShell } from '@/features/command/hooks/useLaunchWorktr
 import { useMergeWorktree } from '@/hooks/useMergeWorktree';
 import { useDeleteWorktree } from '@/hooks/useDeleteWorktree';
 import { ApiError } from '@/lib/apiClient';
+import { getSessionKey } from '@/lib/session-utils';
 
 interface WorktreeDetailsProps {
   worktree: WorktreeSummary | null;
@@ -158,6 +164,21 @@ export default function WorktreeDetails({
   const deleteForceCheckboxId = useId();
   const runCommandDialogTitleId = useId();
   const runCommandDialogDescriptionId = useId();
+
+  const uniqueSessions = useMemo<WorktreeSessionSummary[]>(() => {
+    if (!worktree) {
+      return [];
+    }
+    const seen = new Set<string>();
+    return worktree.sessions.filter((session) => {
+      const key = getSessionKey(session);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }, [worktree]);
 
   const hasWorktree = Boolean(worktree?.id);
   const selectedMergeStrategy = MERGE_STRATEGIES.find(
@@ -415,7 +436,7 @@ export default function WorktreeDetails({
   const status = worktree.git_status ?? undefined;
   const commit = worktree.head_commit ?? undefined;
   const commitsAhead = worktree.commits_ahead ?? undefined;
-  const sessionCount = worktree.sessions.length;
+  const sessionCount = uniqueSessions.length;
   const diffEstimate =
     status !== undefined
       ? status.staged + status.unstaged + status.untracked
@@ -612,7 +633,7 @@ export default function WorktreeDetails({
 
           {activePanel === 'sessions' ? (
             <WorktreeSessions
-              sessions={worktree.sessions}
+              sessions={uniqueSessions}
               formatTimestamp={formatTimestamp}
               worktreeId={worktree.id}
             />
