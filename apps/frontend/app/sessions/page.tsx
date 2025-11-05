@@ -623,7 +623,10 @@ function SessionGroupSidebar({
           </div>
         </div>
       ) : null}
-      <ScrollArea className="flex-1 min-h-0">
+      <ScrollArea
+        className="flex-1 min-h-0"
+        viewportClassName="[&>div]:min-w-0 [&>div]:w-full [&>div]:max-w-full [&>div]:table-fixed"
+      >
         {sections.length === 0 ? (
           <div className="px-3 py-4 text-xs text-muted-foreground/80">
             {isLoading
@@ -1009,7 +1012,7 @@ function SessionDetailPanel({
 }: SessionDetailPanelProps) {
   if (!selectedSession) {
     return (
-      <div className="flex h-full items-center justify-center rounded-lg border border-border bg-card px-6 py-10 text-sm text-muted-foreground">
+      <div className="flex h-full w-full min-h-0 min-w-0 items-center justify-center rounded-lg border border-border bg-card px-6 py-10 text-sm text-muted-foreground">
         Select a session on the left to inspect its transcript.
       </div>
     );
@@ -1361,8 +1364,8 @@ export default function SessionsPage() {
 
   const main = (
     <div className="flex h-full w-full flex-1 min-h-0 flex-col gap-4 px-4 py-6">
-      <div className="flex h-full flex-1 min-h-0 flex-col gap-4 lg:flex-row">
-        <div className="flex h-full flex-1 min-h-0 flex-col lg:flex-[0.45]">
+      <div className="flex h-full flex-1 min-h-0 flex-col gap-4 overflow-hidden lg:flex-row">
+        <div className="flex h-full flex-1 min-h-0 min-w-0 flex-col overflow-hidden lg:flex-[0.45]">
           <SessionSummaryList
             sessions={visibleSessions}
             selectedSessionKey={selectedSessionKey}
@@ -1377,7 +1380,7 @@ export default function SessionsPage() {
             onProviderChange={setSelectedProvider}
           />
         </div>
-        <div className="flex h-full flex-1 min-h-0 lg:flex-[0.55]">
+        <div className="flex h-full flex-1 min-h-0 min-w-0 overflow-hidden lg:flex-[0.55]">
           <SessionDetailPanel
             selectedSession={selectedSession}
             sessionItems={detailItems}

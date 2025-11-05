@@ -1022,7 +1022,7 @@ export default function SessionListView({
   };
 
   return (
-    <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-gray-200 bg-white">
+    <section className="flex h-full min-h-0 min-w-0 w-full max-w-full flex-1 flex-col overflow-hidden rounded-lg border border-gray-200 bg-white">
       <header className="flex shrink-0 flex-col gap-2 border-b border-gray-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-900">
@@ -1037,7 +1037,10 @@ export default function SessionListView({
           <span className="text-xs text-gray-400">{sessions.length} total</span>
         </div>
       </header>
-      <ScrollArea className="flex-1 min-h-0">
+      <ScrollArea
+        className="flex-1 min-h-0"
+        viewportClassName="[&>div]:min-w-0 [&>div]:w-full [&>div]:max-w-full [&>div]:table-fixed"
+      >
         {sessions.length > 0 ? (
           <ul className="divide-y divide-gray-100">
           {sessions.map((session) => {
