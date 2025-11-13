@@ -160,6 +160,35 @@ function normalizeCommandValue(value: unknown): string | null {
   return null;
 }
 
+function extractAgentReasoningText(detail: SessionEvent): string | null {
+  if (isRecord(detail.data)) {
+    const dataText = coerceString(detail.data["text"]);
+    if (dataText) {
+      return dataText;
+    }
+  }
+
+  const rawText = detail.text?.trim();
+  if (!rawText) {
+    return null;
+  }
+
+  if (!rawText.startsWith("{")) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawText);
+    if (isRecord(parsed)) {
+      return coerceString(parsed["text"]);
+    }
+  } catch {
+    // Ignore parsing errors, we'll fall back to the original text below.
+  }
+
+  return null;
+}
+
 function extractToolCommandSummary(tool: SessionToolEvent): string | null {
   if (tool.phase !== "use") {
     return null;
@@ -778,10 +807,13 @@ function buildDefaultRender(
 ): SessionMessageRenderResult {
   const detail = message.detail;
   const normalizedCategory = detail.category.trim().toLowerCase();
+  const isAgentReasoning = normalizedCategory === "agent_reasoning";
+  const agentReasoningText = isAgentReasoning ? extractAgentReasoningText(detail) : null;
   if (detail.tool) {
     return buildToolRender(detail, detail.tool, index, formatTimestamp);
   }
   const baseText =
+    agentReasoningText ??
     detail.text ??
     detail.summary_text ??
     (detail.data ? JSON.stringify(detail.data, null, 2) : "");
@@ -958,10 +990,12 @@ function buildDefaultRender(
   );
 
   const accent = getMessageAccent(detail);
-  const shouldCollapse = shouldCollapsePlainMessage(baseText);
+  const baseShouldCollapse = shouldCollapsePlainMessage(baseText);
   const accentDefaultCollapsed = accent.defaultCollapsed ?? false;
-  const collapsible = shouldCollapse || accentDefaultCollapsed;
-  const defaultCollapsed = accentDefaultCollapsed || shouldCollapse;
+  const collapsible = baseShouldCollapse || accentDefaultCollapsed;
+  const defaultCollapsed = isAgentReasoning
+    ? false
+    : accentDefaultCollapsed || baseShouldCollapse;
 
   return {
     title,
