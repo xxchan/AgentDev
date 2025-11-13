@@ -1,24 +1,25 @@
 # agentdev
 
 Features
-- Worktree 管理多 agent 并行开发
-- 多 agent 跑同一个任务赛马🏇
-- Worktrees / Sessions UI
+- Git worktree management for parallel, multi-agent development
+- Worktrees / Sessions UI for inspecting local runs
+- Run multiple agents on the same task for a "race" comparison 🏇 (planned)
 
-## 安装
+## Installation
 
-[Install Rust](https://www.rust-lang.org/tools/install)
+Prerequisites:
+- [Install Rust](https://www.rust-lang.org/tools/install)
+- Install `pnpm`
 
 ```bash
 cargo install --git https://github.com/xxchan/AgentDev agentdev
 ```
 
-## 配置
+## Configuration
 
-在 `~/.config/agentdev/config.toml` 配置 agent 池。参考默认配置里的说明。
-或者参考 [config.example.toml](https://github.com/xxchan/AgentDev/blob/main/config.example.toml)
+Configure your agent pool in `~/.config/agentdev/config.toml`. Use the comments in the default file for guidance or consult [config.example.toml](https://github.com/xxchan/AgentDev/blob/main/config.example.toml).
 
-## 使用
+## Usage
 
 ### UI
 
@@ -26,28 +27,31 @@ cargo install --git https://github.com/xxchan/AgentDev agentdev
 agentdev ui --port 9999
 ```
 
-- /sessions 页面: 查看本地所有 agent sessions（不依赖）
-- /worktrees 页面: 查看 agentdev 管理的 worktrees 里的 agent sessions / git diff
+- `/sessions`: inspect every local agent session (works without agentdev)
+- `/worktrees`: inspect agentdev-managed worktrees, their agent sessions, and git diffs
 
 ### Worktree-driven local parallel development
 
 ```bash
-# create a worktree, and start an agent session
+# Create a worktree and start an agent session
 agentdev wt create
 
-# Run a command in a worktree, e.g., `pnpm dev`, `code .`
+# Run a command inside a worktree, e.g., `pnpm dev`, `code .`
 agentdev wt exec <cmd>
 
-# Merge worktree into main / delete worktree
+# Merge a worktree back to main or delete it
 agentdev wt [merge|delete] <worktree>
+
+# Inspect everything agentdev is tracking
+agentdev wt list
 ```
 
-### 并行多 Agent 赛马（TODO）
+### Parallel multi-agent race (planned)
 
 ```bash
-agentdev start "研究一下这个项目，把介绍写到一个文件里"
-# 只选部分 Agent，以及显式指定任务名
-agentdev start "研究一下这个项目，把介绍写到一个文件里" --agents claude,codex --name research
+agentdev start "Research this project and summarize it in a file"
+# Run only specific agents and explicitly name the task
+agentdev start "Research this project and summarize it in a file" --agents claude,codex --name research
 
 agentdev delete-task <task>
 ```
