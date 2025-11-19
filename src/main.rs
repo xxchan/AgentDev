@@ -128,6 +128,9 @@ enum Commands {
         /// Host to bind the web server to (e.g. 0.0.0.0 to allow remote access)
         #[arg(long)]
         host: Option<std::net::IpAddr>,
+        /// Run in headless mode (no auto-open browser)
+        #[arg(long)]
+        headless: bool,
     },
 }
 
@@ -172,7 +175,7 @@ fn main() -> Result<()> {
             name,
         } => handle_start(prompt, agents, name),
         Commands::DeleteTask { task_name } => handle_delete_task_cli(task_name),
-        Commands::Ui { port, host } => handle_ui(port, host),
+        Commands::Ui { port, host, headless } => handle_ui(port, host, headless),
         // Backward-compatible routing
         Commands::Create { name, agent } => handle_create(name, agent),
         Commands::Open { name, agent } => handle_open(name, agent),
