@@ -11,43 +11,7 @@ import {
 import { getJson } from '@/lib/apiClient';
 import { queryKeys } from '@/lib/queryKeys';
 import GitDiffList, { GitDiffListEntry } from '@/components/GitDiffList';
-
-type GitDiffSection = {
-  diff: string;
-  key: string;
-};
-
-function splitGitDiffByFile(diffText: string): GitDiffSection[] {
-  if (!diffText.trim()) {
-    return [];
-  }
-  const normalized = diffText.trimStart();
-  const lines = normalized.split('\n');
-  const sections: GitDiffSection[] = [];
-  let current: string[] = [];
-
-  const flush = () => {
-    if (!current.length) return;
-    const diffChunk = current.join('\n');
-    const firstLine = current[0] ?? '';
-    sections.push({
-      diff: diffChunk,
-      key: `${firstLine}|${sections.length}`,
-    });
-    current = [];
-  };
-
-  for (const line of lines) {
-    if (line.startsWith('diff --git ') && current.length) {
-      flush();
-    }
-    current.push(line);
-  }
-
-  flush();
-
-  return sections;
-}
+import { parseDiff, File } from '@/components/ui/diff/utils';
 
 const STATUS_LABELS: Record<string, string> = {
   A: 'Added',
@@ -83,25 +47,17 @@ function computeDiffStats(diffText: string): { additions: number; deletions: num
   return { additions, deletions };
 }
 
-function extractDiffLabel(diffText: string, fallback: string): string {
-  const headerMatch = diffText.match(/^diff --git a\/(.+?) b\/(.+)$/m);
-  const stripPrefix = (value: string | null | undefined) => {
-    if (!value) return null;
-    if (value === '/dev/null') return null;
-    return value.replace(/^[ab]\//, '');
-  };
-
-  if (!headerMatch) {
-    return fallback;
+function parseDiffFiles(diffText: string): File[] {
+  if (!diffText || !diffText.trim()) {
+    return [];
   }
 
-  const oldPath = stripPrefix(headerMatch[1]) ?? fallback;
-  const newPath = stripPrefix(headerMatch[2]) ?? fallback;
-
-  if (oldPath && newPath && oldPath !== newPath) {
-    return `${oldPath} → ${newPath}`;
+  try {
+    return parseDiff(diffText);
+  } catch (error) {
+    console.error('Failed to parse diff entry', error);
+    return [];
   }
-  return newPath ?? oldPath ?? fallback;
 }
 
 interface WorktreeGitSectionProps {
@@ -178,18 +134,35 @@ export default function WorktreeGitSection({
     });
   };
 
-  const commitDiffSections = useMemo(
-    () =>
-      gitDetails?.commit_diff?.diff
-        ? splitGitDiffByFile(gitDetails.commit_diff.diff)
-        : [],
-    [gitDetails?.commit_diff?.diff],
-  );
-
   const diffEntries = useMemo<GitDiffListEntry[]>(() => {
     if (!gitDetails) return [];
 
     const result: GitDiffListEntry[] = [];
+
+    const buildEntry = (
+      diffText: string,
+      label: string,
+      groupKey: string,
+      groupLabel: string,
+      status?: string | null,
+      statusLabel?: string | null,
+      keySuffix?: string,
+    ) => {
+      const normalizedDiff = diffText ?? '';
+      const { additions, deletions } = computeDiffStats(normalizedDiff);
+      result.push({
+        key: `${groupKey}:${keySuffix ?? label}`,
+        title: label,
+        groupKey,
+        groupLabel,
+        status,
+        statusLabel,
+        diffText: normalizedDiff,
+        additions,
+        deletions,
+        files: parseDiffFiles(normalizedDiff),
+      });
+    };
 
     const pushGroup = (
       items: WorktreeGitDetails['staged'],
@@ -199,40 +172,24 @@ export default function WorktreeGitSection({
       items.forEach((entry, index) => {
         const diffText = entry.diff ?? '';
         const label = entry.display_path || entry.path || `File ${index + 1}`;
-        const { additions, deletions } = computeDiffStats(diffText);
-        result.push({
-          key: `${groupKey}:${index}:${label}`,
-          title: label,
+        buildEntry(
+          diffText,
+          label,
           groupKey,
           groupLabel,
-          status: entry.status,
-          statusLabel: normaliseStatusLabel(entry.status),
-          diffText,
-          additions,
-          deletions,
-        });
+          entry.status,
+          normaliseStatusLabel(entry.status),
+          `${index}:${label}`,
+        );
       });
     };
 
-    if (commitDiffSections.length) {
-      const commitLabel = gitDetails.commit_diff?.reference
+    if (gitDetails.commit_diff?.diff) {
+      const commitLabel = gitDetails.commit_diff.reference
         ? `Divergence vs ${gitDetails.commit_diff.reference}`
         : 'Divergence vs base';
-      commitDiffSections.forEach((section, index) => {
-        const { additions, deletions } = computeDiffStats(section.diff);
-        const title = extractDiffLabel(section.diff, `Commit diff ${index + 1}`);
-        result.push({
-          key: `commit:${index}:${title}`,
-          title,
-          groupKey: 'commit',
-          groupLabel: commitLabel,
-          status: 'C',
-          statusLabel: 'Commit',
-          diffText: section.diff,
-          additions,
-          deletions,
-        });
-      });
+      const diffText = gitDetails.commit_diff.diff;
+      buildEntry(diffText, commitLabel, 'commit', commitLabel, 'C', 'Commit', 'divergence');
     }
 
     pushGroup(gitDetails.staged, 'staged', 'Staged');
@@ -240,7 +197,7 @@ export default function WorktreeGitSection({
     pushGroup(gitDetails.untracked, 'untracked', 'Untracked');
 
     return result;
-  }, [gitDetails, commitDiffSections]);
+  }, [gitDetails]);
 
   const renderGitOverview = () => {
     const commitsAheadList = commitsAhead?.commits ?? [];
@@ -415,7 +372,12 @@ export default function WorktreeGitSection({
     );
   };
 
-  const totalDiffCount = gitDetails ? diffEntries.length : null;
+  const totalDiffCount = gitDetails
+    ? diffEntries.reduce(
+        (sum, entry) => sum + Math.max(entry.files.length, entry.diffText.trim() ? 1 : 0),
+        0,
+      )
+    : null;
 
   return (
     <div className="space-y-4">
@@ -433,7 +395,7 @@ export default function WorktreeGitSection({
           <div className="flex items-center gap-2">
             {totalDiffCount !== null && (
               <span className="text-xs text-gray-400">
-                {totalDiffCount} {totalDiffCount === 1 ? 'entry' : 'entries'}
+                {totalDiffCount} {totalDiffCount === 1 ? 'file' : 'files'}
               </span>
             )}
             <button

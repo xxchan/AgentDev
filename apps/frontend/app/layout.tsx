@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import QueryProvider from './query-provider';
 import './globals.css';
-import '@git-diff-view/react/styles/diff-view.css';
 
 export const metadata: Metadata = {
   title: "AgentDev UI",
