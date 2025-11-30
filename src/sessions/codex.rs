@@ -7,9 +7,10 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use ignore::WalkBuilder;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use walkdir::WalkDir;
 
 use super::{SessionEvent, SessionProvider, SessionRecord, SessionToolEvent, SessionToolPhase};
 
@@ -467,9 +468,15 @@ impl SessionProvider for CodexSessionProvider {
         let mut seen_paths: HashSet<PathBuf> = HashSet::new();
         let mut refresh_list: Vec<(PathBuf, Option<SystemTime>, u64)> = Vec::new();
 
-        for entry in WalkDir::new(dir)
+        // Use ignore crate for faster parallel-friendly traversal
+        for entry in WalkBuilder::new(dir)
+            .hidden(false)
+            .ignore(false)
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
             .follow_links(false)
-            .into_iter()
+            .build()
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
@@ -505,12 +512,15 @@ impl SessionProvider for CodexSessionProvider {
 
         drop(cache);
 
-        let mut refreshed: Vec<(PathBuf, Option<SystemTime>, u64, Option<SessionRecord>)> =
-            Vec::with_capacity(refresh_list.len());
-        for (path_buf, modified, len) in refresh_list {
-            let record = self.parse_session_file(&path_buf);
-            refreshed.push((path_buf, modified, len, record));
-        }
+        // Parallel file parsing with rayon
+        let refreshed: Vec<(PathBuf, Option<SystemTime>, u64, Option<SessionRecord>)> =
+            refresh_list
+                .into_par_iter()
+                .map(|(path_buf, modified, len)| {
+                    let record = self.parse_session_file(&path_buf);
+                    (path_buf, modified, len, record)
+                })
+                .collect();
 
         let mut cache = cache_lock
             .lock()

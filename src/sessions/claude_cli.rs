@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -373,12 +374,15 @@ impl SessionProvider for ClaudeCliSessionProvider {
 
         drop(cache);
 
-        let mut refreshed: Vec<(PathBuf, Option<SystemTime>, u64, Option<SessionRecord>)> =
-            Vec::with_capacity(refresh_list.len());
-        for (path_buf, modified, len) in refresh_list {
-            let record = self.parse_session_file(&path_buf);
-            refreshed.push((path_buf, modified, len, record));
-        }
+        // Parallel file parsing with rayon
+        let refreshed: Vec<(PathBuf, Option<SystemTime>, u64, Option<SessionRecord>)> =
+            refresh_list
+                .into_par_iter()
+                .map(|(path_buf, modified, len)| {
+                    let record = self.parse_session_file(&path_buf);
+                    (path_buf, modified, len, record)
+                })
+                .collect();
 
         let mut cache = cache_lock
             .lock()

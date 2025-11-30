@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -318,7 +319,8 @@ impl SessionProvider for KimiSessionProvider {
             .expect("kimi session cache mutex poisoned");
 
         let mut seen_paths: HashSet<PathBuf> = HashSet::new();
-        let mut refresh_list: Vec<(PathBuf, Option<SystemTime>, u64)> = Vec::new();
+        // Include resolved working_dir in the refresh list for parallel processing
+        let mut refresh_list: Vec<(PathBuf, Option<SystemTime>, u64, Option<PathBuf>)> = Vec::new();
 
         for entry in fs::read_dir(root)? {
             let entry = match entry {
@@ -358,7 +360,9 @@ impl SessionProvider for KimiSessionProvider {
                     };
 
                     if needs_refresh {
-                        refresh_list.push((path_buf, modified, len));
+                        // Resolve working_dir upfront for parallel processing
+                        let working_dir = self.resolve_working_dir(&path_buf).map(Path::to_path_buf);
+                        refresh_list.push((path_buf, modified, len, working_dir));
                     }
                 }
             }
@@ -373,14 +377,15 @@ impl SessionProvider for KimiSessionProvider {
 
         drop(cache);
 
-        let mut refreshed: Vec<(PathBuf, Option<SystemTime>, u64, Option<SessionRecord>)> =
-            Vec::with_capacity(refresh_list.len());
-
-        for (path_buf, modified, len) in refresh_list {
-            let working_dir = self.resolve_working_dir(&path_buf);
-            let record = self.parse_session_file(&path_buf, working_dir);
-            refreshed.push((path_buf, modified, len, record));
-        }
+        // Parallel file parsing with rayon
+        let refreshed: Vec<(PathBuf, Option<SystemTime>, u64, Option<SessionRecord>)> =
+            refresh_list
+                .into_par_iter()
+                .map(|(path_buf, modified, len, working_dir)| {
+                    let record = self.parse_session_file(&path_buf, working_dir.as_deref());
+                    (path_buf, modified, len, record)
+                })
+                .collect();
 
         let mut cache = cache_lock
             .lock()
