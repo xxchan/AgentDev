@@ -561,6 +561,31 @@ fn detect_default_branch_for_repo(repo: &str) -> Option<String> {
         }
     }
 
+    // Try local-only methods first to avoid network requests
+
+    // Method 1: Check symbolic-ref (fastest, no network)
+    let symbolic_branch = execute_git(&["-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD"])
+        .ok()
+        .and_then(|output| {
+            output
+                .trim()
+                .strip_prefix("refs/remotes/origin/")
+                .map(|branch| branch.to_string())
+        });
+
+    if let Some(branch) = symbolic_branch {
+        return store_default_branch(repo, Some(branch));
+    }
+
+    // Method 2: Check common branch names locally
+    for candidate in ["main", "master", "develop"] {
+        let ref_name = format!("refs/remotes/origin/{candidate}");
+        if execute_git(&["-C", repo, "rev-parse", "--verify", "--quiet", &ref_name]).is_ok() {
+            return store_default_branch(repo, Some(candidate.to_string()));
+        }
+    }
+
+    // Method 3: Fallback to remote show (may trigger network request)
     let remote_show_branch = execute_git(&["-C", repo, "remote", "show", "origin"])
         .ok()
         .and_then(|output| {
@@ -570,19 +595,7 @@ fn detect_default_branch_for_repo(repo: &str) -> Option<String> {
             })
         });
 
-    if let Some(branch) = remote_show_branch {
-        return store_default_branch(repo, Some(branch));
-    }
-
-    let symbolic_branch = execute_git(&["-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD"])
-        .ok()
-        .and_then(|output| {
-            output
-                .strip_prefix("refs/remotes/origin/")
-                .map(|branch| branch.to_string())
-        });
-
-    store_default_branch(repo, symbolic_branch)
+    store_default_branch(repo, remote_show_branch)
 }
 
 fn store_default_branch(repo: &str, branch: Option<String>) -> Option<String> {
