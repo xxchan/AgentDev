@@ -1,3 +1,37 @@
+//! # Worktree Discovery
+//!
+//! This module provides the core abstractions for working with git worktrees.
+//!
+//! ## Architecture: Git as Single Source of Truth
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────┐
+//! │       agentdev State (Metadata Enrichment)      │
+//! │   name, created_at, task_id, agent_alias...     │
+//! └─────────────────────────────────────────────────┘
+//!                         │ enriches (optional)
+//!                         ▼
+//! ┌─────────────────────────────────────────────────┐
+//! │         Git Worktree (Single Source of Truth)   │
+//! │   path, branch, HEAD, repo_root                 │
+//! └─────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Key Types
+//!
+//! - [`GitWorktree`]: Core worktree info from git (path, branch, repo_root).
+//!   This is the foundation for all worktree operations and doesn't depend on
+//!   agentdev state.
+//!
+//! - [`DiscoveredWorktree`]: Result of worktree discovery, including extra git
+//!   metadata (locked, prunable status).
+//!
+//! ## Design Principles
+//!
+//! 1. All worktree operations should work without agentdev state
+//! 2. agentdev state provides optional metadata enrichment (name, task info)
+//! 3. Core info (path, branch, repo_root) always comes from git commands
+
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use serde::Serialize;
@@ -5,11 +39,128 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::git::execute_git;
+use crate::git::{execute_git, get_current_branch};
 use crate::state::{WorktreeInfo, XlaudeState};
 use crate::utils::sanitize_branch_name;
 
 pub const MAX_RECURSIVE_DEPTH: usize = 6;
+
+/// Core worktree information derived directly from git.
+///
+/// This is the foundation for all worktree operations. It contains only
+/// information that can be obtained from git commands, without depending
+/// on agentdev state.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// // Get current worktree (if in one)
+/// if let Some(wt) = GitWorktree::from_current_dir()? {
+///     println!("In worktree: {} on branch {:?}", wt.path.display(), wt.branch);
+/// }
+///
+/// // Get worktree from a specific path
+/// let wt = GitWorktree::from_path(&some_path)?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct GitWorktree {
+    /// Absolute path to the worktree root
+    pub path: PathBuf,
+    /// Current branch name (None if detached HEAD)
+    pub branch: Option<String>,
+    /// HEAD commit hash
+    pub head: Option<String>,
+    /// Path to the main repository (where .git directory lives)
+    pub repo_root: PathBuf,
+}
+
+impl GitWorktree {
+    /// Create a GitWorktree from the current directory.
+    ///
+    /// Returns `Ok(Some(wt))` if currently in a git worktree (not the main repo),
+    /// `Ok(None)` if in the main repo, or an error if not in a git repository.
+    pub fn from_current_dir() -> Result<Option<Self>> {
+        let current_dir = std::env::current_dir()?;
+        Self::from_path(&current_dir)
+    }
+
+    /// Create a GitWorktree from a specific path.
+    ///
+    /// Returns `Ok(Some(wt))` if the path is a git worktree (not the main repo),
+    /// `Ok(None)` if it's the main repo, or an error if not in a git repository.
+    pub fn from_path(path: &Path) -> Result<Option<Self>> {
+        let path_str = path.to_str().context("Path contains invalid UTF-8")?;
+
+        // Get the toplevel of this worktree/repo
+        let toplevel = execute_git(&["-C", path_str, "rev-parse", "--show-toplevel"])?;
+        let toplevel = PathBuf::from(toplevel.trim());
+
+        // Get the git common dir (points to main repo's .git)
+        let common_dir = execute_git(&["-C", path_str, "rev-parse", "--git-common-dir"])?;
+        let common_dir = common_dir.trim();
+
+        let common_path = if Path::new(common_dir).is_absolute() {
+            PathBuf::from(common_dir)
+        } else {
+            toplevel.join(common_dir)
+        };
+
+        let common_canon = fs::canonicalize(&common_path)
+            .unwrap_or_else(|_| common_path.clone());
+        let toplevel_canon = fs::canonicalize(&toplevel)
+            .unwrap_or_else(|_| toplevel.clone());
+
+        // If common_dir's parent is toplevel, we're in the main repo, not a worktree
+        if let Some(parent) = common_canon.parent() {
+            if parent == toplevel_canon {
+                return Ok(None);
+            }
+        }
+
+        // We're in a worktree - gather info
+        let repo_root = common_canon
+            .parent()
+            .map(|p| p.to_path_buf())
+            .context("Failed to determine main repo path")?;
+
+        let branch = get_current_branch().ok();
+
+        let head = execute_git(&["-C", path_str, "rev-parse", "HEAD"])
+            .ok()
+            .map(|s| s.trim().to_string());
+
+        Ok(Some(GitWorktree {
+            path: toplevel_canon,
+            branch,
+            head,
+            repo_root,
+        }))
+    }
+
+    /// Get the repository name (directory name of main repo).
+    pub fn repo_name(&self) -> String {
+        self.repo_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    }
+
+    /// Get a display name for this worktree.
+    ///
+    /// Prefers branch name, falls back to directory name.
+    pub fn display_name(&self) -> String {
+        self.branch
+            .clone()
+            .or_else(|| {
+                self.path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| self.path.display().to_string())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

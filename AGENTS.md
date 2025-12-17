@@ -1,5 +1,46 @@
 # agentdev（原 xlaude）- Claude 实例管理工具
 
+## 架构设计原则
+
+### Worktree 子命令：Git 为核心，State 为 Metadata Layer
+
+> **适用范围：** 此原则适用于 `agentdev worktree` 下的子命令（merge、delete、list 等）。
+> Agent 相关功能（如 `open`）需要依赖 managed metadata（name、agent_alias 等）。
+
+```
+┌─────────────────────────────────────────────────┐
+│       agentdev State (Metadata Enrichment)      │
+│   name, created_at, task_id, agent_alias...     │
+└─────────────────────────────────────────────────┘
+                        │ enriches (可选)
+                        ▼
+┌─────────────────────────────────────────────────┐
+│         Git Worktree (Single Source of Truth)   │
+│   path, branch, HEAD, repo_root                 │
+└─────────────────────────────────────────────────┘
+```
+
+**设计思想：**
+
+1. **Git 是 worktree 的 single source of truth**
+   - worktree 的核心信息（path, branch, HEAD, repo_root）来自 git 命令
+   - 不依赖 agentdev state 也能获取这些信息
+
+2. **agentdev state 是可选的 metadata enrichment layer**
+   - 存储 git 不知道的额外信息：name（人类友好别名）、created_at、task_id、agent_alias 等
+   - 用于增强显示和管理体验，但不是 worktree 操作的前提条件
+
+3. **worktree 操作应该：**
+   - 先从 git 获取核心信息（`GitWorktree` 结构）
+   - 可选地从 state 获取 metadata（如果有）
+   - 执行操作
+   - 如果有 state 记录，执行相应的清理
+
+4. **好处：**
+   - `merge`、`delete` 等命令可以在任意 git worktree 中使用，不限于 agentdev 管理的
+   - 代码更简洁，核心逻辑与 state 管理解耦
+   - 更符合 Unix 哲学：做好一件事，与其他工具协作
+
 ## 开发/验证流程备忘
 
 每次完成一轮改动，在向用户同步结果前必须先“自验证”：

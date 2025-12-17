@@ -1,16 +1,16 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use colored::Colorize;
 
 use super::delete::handle_delete;
-use crate::input::{get_command_arg, smart_confirm, smart_select};
+use crate::input::{get_command_arg, smart_confirm};
+use agentdev::discovery::GitWorktree;
 use agentdev::git::{
     ahead_behind, execute_git, get_current_branch, get_default_branch, is_working_tree_clean,
-    resolve_main_repo_dir,
 };
-use agentdev::state::{WorktreeInfo, XlaudeState};
+use agentdev::state::XlaudeState;
 use agentdev::utils::execute_in_dir;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -30,27 +30,31 @@ pub fn handle_merge(
 ) -> Result<()> {
     let state = XlaudeState::load()?;
     let target_name = get_command_arg(name)?;
-    let worktree_info = resolve_worktree(&state, target_name)?;
 
-    if !worktree_info.path.exists() {
+    // Resolve worktree - returns GitWorktree (from git) and optional managed name
+    let (git_wt, managed_name) = resolve_worktree_for_merge(&state, target_name)?;
+
+    if !git_wt.path.exists() {
         bail!(
-            "Worktree directory not found at {}. If it was removed manually, run 'agentdev worktree delete {}' to clean up state.",
-            worktree_info.path.display(),
-            worktree_info.name
+            "Worktree directory not found at {}.",
+            git_wt.path.display()
         );
     }
 
-    let main_repo_path = get_main_repo_path(&worktree_info)?;
-    if !main_repo_path.exists() {
+    if !git_wt.repo_root.exists() {
         bail!(
             "Main repository directory not found at {}.",
-            main_repo_path.display()
+            git_wt.repo_root.display()
         );
     }
 
-    ensure_clean(&worktree_info.path, "worktree")
-        .with_context(|| format!("Worktree '{}' has pending changes", worktree_info.name))?;
-    ensure_clean(&main_repo_path, "main repository")
+    let branch = git_wt.branch.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("Cannot merge: worktree is in detached HEAD state")
+    })?;
+
+    ensure_clean(&git_wt.path, "worktree")
+        .with_context(|| format!("Worktree '{}' has pending changes", git_wt.display_name()))?;
+    ensure_clean(&git_wt.repo_root, "main repository")
         .context("Main repository has pending changes")?;
 
     let resolved_strategy = resolve_strategy(strategy, squash_flag)?;
@@ -58,31 +62,31 @@ pub fn handle_merge(
     println!(
         "{} Merging '{}' into default branch for '{}'.",
         "🔀".green(),
-        worktree_info.branch.cyan(),
-        worktree_info.repo_name.cyan()
+        branch.cyan(),
+        git_wt.repo_name().cyan()
     );
 
-    fetch_origin(&main_repo_path)?;
-    let default_branch = determine_default_branch(&main_repo_path)?;
+    fetch_origin(&git_wt.repo_root)?;
+    let default_branch = determine_default_branch(&git_wt.repo_root)?;
 
-    checkout_base_branch(&main_repo_path, &default_branch)?;
-    update_base_branch(&main_repo_path, &default_branch)?;
+    checkout_base_branch(&git_wt.repo_root, &default_branch)?;
+    update_base_branch(&git_wt.repo_root, &default_branch)?;
 
     let outcome = merge_branch(
-        &main_repo_path,
-        &worktree_info,
+        &git_wt.repo_root,
+        branch,
         &default_branch,
         resolved_strategy,
     )?;
 
     if push {
-        push_default_branch(&main_repo_path, &default_branch)?;
+        push_default_branch(&git_wt.repo_root, &default_branch)?;
     }
 
     println!(
         "{} '{}' merged into '{}' successfully",
         "✅".green(),
-        worktree_info.branch.cyan(),
+        branch.cyan(),
         default_branch.cyan()
     );
 
@@ -103,183 +107,79 @@ pub fn handle_merge(
         );
     }
 
+    // For cleanup, use managed name if available, otherwise use None (delete from current dir)
+    let display_name = managed_name.clone().unwrap_or_else(|| git_wt.display_name());
     let delete_now = smart_confirm(
-        &format!("Delete worktree '{}' now?", worktree_info.name),
+        &format!("Delete worktree '{}' now?", display_name),
         cleanup,
     )?;
 
     if delete_now {
-        handle_delete(Some(worktree_info.name.clone()))?;
+        // Pass managed name if available, None otherwise (delete will use current dir)
+        handle_delete(managed_name)?;
     } else {
         println!(
-            "  {} Run `agentdev worktree delete {}` to clean up the worktree",
-            "ℹ️".blue(),
-            worktree_info.name
+            "  {} Run `agentdev worktree delete` to clean up the worktree",
+            "ℹ️".blue()
         );
     }
 
     Ok(())
 }
 
-fn resolve_worktree(state: &XlaudeState, target_name: Option<String>) -> Result<WorktreeInfo> {
-    let current_dir = std::env::current_dir()?;
-
+/// Resolve worktree for merge operation.
+///
+/// Returns `(GitWorktree, Option<managed_name>)`:
+/// - GitWorktree contains core info from git
+/// - managed_name is Some if the worktree is in agentdev state (for cleanup)
+fn resolve_worktree_for_merge(
+    state: &XlaudeState,
+    target_name: Option<String>,
+) -> Result<(GitWorktree, Option<String>)> {
     if let Some(name) = target_name {
-        if let Some(info) = state
+        // By name: only works for managed worktrees
+        let info = state
             .worktrees
             .values()
             .find(|info| info.name == name)
             .cloned()
-        {
-            return Ok(info);
-        }
+            .context(format!("Worktree '{}' not found in agentdev state", name))?;
 
-        if let Some(info) = resolve_selection_from_input(state, &current_dir, &name)? {
-            return Ok(info);
-        }
+        // Build GitWorktree from the managed path
+        let git_wt = GitWorktree::from_path(&info.path)?
+            .ok_or_else(|| anyhow::anyhow!(
+                "Path '{}' is not a git worktree",
+                info.path.display()
+            ))?;
 
-        bail!("Worktree '{}' not found", name);
+        return Ok((git_wt, Some(info.name)));
     }
 
-    if let Some(info) = find_worktree_for_dir(state, &current_dir)? {
-        return Ok(info);
-    }
+    // No name: try current directory
+    let git_wt = GitWorktree::from_current_dir()?
+        .ok_or_else(|| anyhow::anyhow!(
+            "Current directory is not a git worktree. \
+             If you're in the main repository, specify the worktree name."
+        ))?;
 
-    match select_worktree_for_repo(state, &current_dir)? {
-        WorktreeSelection::Selected(info) => Ok(info),
-        WorktreeSelection::NoWorktrees => {
-            bail!(
-                "No managed worktrees found for the current repository. Provide a worktree name or create one before merging."
-            );
-        }
-        WorktreeSelection::Cancelled => {
-            bail!(
-                "No worktree selected. Provide a worktree name or run the command from a worktree directory."
-            );
-        }
-    }
+    // Try to find matching state entry for managed name
+    let managed_name = find_managed_name_by_path(state, &git_wt.path);
+
+    Ok((git_wt, managed_name))
 }
 
-fn find_worktree_for_dir(state: &XlaudeState, current_dir: &Path) -> Result<Option<WorktreeInfo>> {
-    let dir_name = match current_dir.file_name().and_then(|n| n.to_str()) {
-        Some(name) => name,
-        None => return Ok(None),
-    };
+/// Find the managed worktree name for a path
+fn find_managed_name_by_path(state: &XlaudeState, path: &std::path::Path) -> Option<String> {
+    let path_canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
-    let dir_canon = current_dir
-        .canonicalize()
-        .unwrap_or_else(|_| current_dir.to_path_buf());
-
-    let worktree = state.worktrees.values().find_map(|info| {
-        let Some(info_name) = info.path.file_name().and_then(|n| n.to_str()) else {
-            return None;
-        };
-        if info_name != dir_name {
-            return None;
-        }
-
-        let info_canon = info
-            .path
-            .canonicalize()
-            .unwrap_or_else(|_| info.path.clone());
-        if info_canon == dir_canon {
-            Some(info.clone())
-        } else {
-            None
-        }
-    });
-
-    Ok(worktree)
-}
-
-fn select_worktree_for_repo(state: &XlaudeState, current_dir: &Path) -> Result<WorktreeSelection> {
-    let (repo_name, mut candidates) = worktrees_for_repo(state, current_dir)?;
-
-    if candidates.is_empty() {
-        return Ok(WorktreeSelection::NoWorktrees);
-    }
-
-    if candidates.len() == 1 {
-        return Ok(WorktreeSelection::Selected(candidates.remove(0)));
-    }
-
-    let repo_display = repo_name.unwrap_or_else(|| current_dir.display().to_string());
-    let prompt = format!("Select worktree to merge for repo '{}'", repo_display);
-    match smart_select(&prompt, &candidates, |info| {
-        format!("{} [{}]", info.name, info.branch)
-    })? {
-        Some(index) => Ok(WorktreeSelection::Selected(
-            candidates
-                .get(index)
-                .cloned()
-                .expect("selection index must be valid"),
-        )),
-        None => Ok(WorktreeSelection::Cancelled),
-    }
-}
-
-fn resolve_selection_from_input(
-    state: &XlaudeState,
-    current_dir: &Path,
-    raw_input: &str,
-) -> Result<Option<WorktreeInfo>> {
-    let (_, candidates) = worktrees_for_repo(state, current_dir)?;
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-
-    let input = raw_input.trim();
-
-    if let Ok(index) = input.parse::<usize>() {
-        return Ok(candidates.get(index).cloned());
-    }
-
-    for info in &candidates {
-        let display = format!("{} [{}]", info.name, info.branch);
-        if display == input {
-            return Ok(Some(info.clone()));
-        }
-    }
-
-    Ok(None)
-}
-
-fn worktrees_for_repo(
-    state: &XlaudeState,
-    current_dir: &Path,
-) -> Result<(Option<String>, Vec<WorktreeInfo>)> {
-    let repo_name = current_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(|s| s.to_string());
-
-    let repo_canon = current_dir
-        .canonicalize()
-        .unwrap_or_else(|_| current_dir.to_path_buf());
-
-    let mut candidates: Vec<WorktreeInfo> = state
+    state
         .worktrees
         .values()
-        .filter_map(|info| {
-            let repo_path = resolve_main_repo_dir(&info.path).ok()?;
-            let repo_path_canon = repo_path.canonicalize().unwrap_or(repo_path.clone());
-            if repo_path_canon == repo_canon {
-                Some(info.clone())
-            } else {
-                None
-            }
+        .find(|w| {
+            let w_canon = std::fs::canonicalize(&w.path).unwrap_or_else(|_| w.path.clone());
+            w_canon == path_canon
         })
-        .collect();
-
-    candidates.sort_by(|a, b| a.name.cmp(&b.name));
-
-    Ok((repo_name, candidates))
-}
-
-enum WorktreeSelection {
-    Selected(WorktreeInfo),
-    NoWorktrees,
-    Cancelled,
+        .map(|w| w.name.clone())
 }
 
 fn resolve_strategy(strategy: Option<MergeStrategy>, squash_flag: bool) -> Result<MergeStrategy> {
@@ -383,11 +283,11 @@ struct CommitMessageParts {
 
 fn merge_branch(
     main_repo_path: &Path,
-    worktree_info: &WorktreeInfo,
+    branch: &str,
     default_branch: &str,
     strategy: MergeStrategy,
 ) -> Result<MergeOutcome> {
-    let branch = worktree_info.branch.clone();
+    let branch = branch.to_string();
     let merge_result = execute_in_dir(main_repo_path, || match strategy {
         MergeStrategy::FfOnly => {
             println!("  {} Fast-forward merging {}", "→".blue(), branch.cyan());
@@ -513,8 +413,4 @@ fn push_default_branch(main_repo_path: &Path, default_branch: &str) -> Result<()
         execute_git(&["push", "origin", default_branch])?;
         Ok(())
     })
-}
-
-fn get_main_repo_path(worktree_info: &WorktreeInfo) -> Result<PathBuf> {
-    resolve_main_repo_dir(&worktree_info.path)
 }
