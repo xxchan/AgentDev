@@ -32,7 +32,7 @@ _agentdev() {{
     fi
 
     # Main commands
-    local commands="worktree sessions start delete-task ui completions"
+    local commands="worktree sessions ui completions"
     local wt_subs="create open delete add rename list clean dir"
 
     # Complete main commands
@@ -106,8 +106,6 @@ _agentdev() {{
         'worktree:Worktree management commands'
         'sessions:Session inspection commands'
         'completions:Generate shell completions'
-        'start:Start a multi-agent task and send a prompt'
-        'delete-task:Delete all resources for a task'
         'ui:Launch web UI for agent management'
     )
 
@@ -223,8 +221,6 @@ complete -c agentdev -f
 # Main commands
 complete -c agentdev -n "__fish_use_subcommand" -a worktree -d "Worktree management commands"
 complete -c agentdev -n "__fish_use_subcommand" -a sessions -d "Session inspection commands"
-complete -c agentdev -n "__fish_use_subcommand" -a start -d "Start a multi-agent task"
-complete -c agentdev -n "__fish_use_subcommand" -a delete-task -d "Delete a task"
 complete -c agentdev -n "__fish_use_subcommand" -a ui -d "Launch web UI"
 complete -c agentdev -n "__fish_use_subcommand" -a completions -d "Generate shell completions"
 

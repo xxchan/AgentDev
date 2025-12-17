@@ -3,7 +3,6 @@
 Features
 - Git worktree management for parallel, multi-agent development
 - Worktrees / Sessions UI for inspecting local runs
-- Run multiple agents on the same task for a "race" comparison 🏇 (planned)
 - Supports ANY CLI coding agents
     + Sessions UI currently supports: [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), Codex, Claude Code
 
@@ -48,12 +47,3 @@ agentdev wt [merge|delete] <worktree>
 agentdev wt list
 ```
 
-### Parallel multi-agent race (planned)
-
-```bash
-agentdev start "Research this project and summarize it in a file"
-# Run only specific agents and explicitly name the task
-agentdev start "Research this project and summarize it in a file" --agents claude,codex --name research
-
-agentdev delete-task <task>
-```

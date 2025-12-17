@@ -8,9 +8,9 @@ mod completions;
 mod input;
 
 use commands::{
-    MergeStrategy, handle_add, handle_clean, handle_create, handle_delete, handle_delete_task_cli,
-    handle_dir, handle_discovery, handle_exec, handle_list, handle_merge, handle_open,
-    handle_rename, handle_sessions_list, handle_start, handle_ui,
+    MergeStrategy, handle_add, handle_clean, handle_create, handle_delete, handle_dir,
+    handle_discovery, handle_exec, handle_list, handle_merge, handle_open, handle_rename,
+    handle_sessions_list, handle_ui,
 };
 
 #[derive(Parser)]
@@ -103,23 +103,6 @@ enum Commands {
         #[arg(long, default_value = "simple")]
         format: String,
     },
-    /// Start a multi-agent task and send an initial prompt
-    Start {
-        /// Initial task prompt (quoted)
-        prompt: String,
-        /// Comma separated agent aliases (default: all agents in config)
-        #[arg(long)]
-        agents: Option<String>,
-        /// Task name (default: random words)
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// Delete all resources for a given task
-    #[command(alias = "delete-tasks")]
-    DeleteTask {
-        /// Task name
-        task_name: Option<String>,
-    },
     /// Launch web UI for agent management
     Ui {
         /// Port to run the web server on
@@ -169,12 +152,6 @@ fn main() -> Result<()> {
         },
         Commands::Completions { shell } => completions::handle_completions(shell),
         Commands::CompleteWorktrees { format } => commands::handle_complete_worktrees(&format),
-        Commands::Start {
-            prompt,
-            agents,
-            name,
-        } => handle_start(prompt, agents, name),
-        Commands::DeleteTask { task_name } => handle_delete_task_cli(task_name),
         Commands::Ui { port, host, headless } => handle_ui(port, host, headless),
         // Backward-compatible routing
         Commands::Create { name, agent } => handle_create(name, agent),
