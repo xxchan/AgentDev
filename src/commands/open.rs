@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::Colorize;
-use std::process::{Command, Stdio};
 
 use crate::input::{drain_stdin, get_command_arg, is_piped_input, smart_confirm, smart_select};
+use agentdev::tmux::TmuxManager;
 use agentdev::git::{get_current_branch, get_repo_name, is_base_branch, is_in_worktree};
 use agentdev::state::{WorktreeInfo, XlaudeState};
 use agentdev::utils::{resolve_agent_command_with_override, sanitize_branch_name};
@@ -95,25 +95,12 @@ pub fn handle_open(name: Option<String>, agent: Option<String>) -> Result<()> {
                 );
             }
 
-            // Launch agent in current directory
-            let (program, args) = resolve_agent_command_with_override(agent.clone())?;
-            let mut cmd = Command::new(&program);
-            cmd.args(&args);
-
-            cmd.envs(std::env::vars());
-
-            // If there's piped input, drain it and don't pass to Claude
+            // Launch agent via tmux
             if is_piped_input() {
                 drain_stdin()?;
-                cmd.stdin(Stdio::null());
             }
 
-            let status = cmd.status().context("Failed to launch agent")?;
-
-            if !status.success() {
-                anyhow::bail!("Agent exited with error");
-            }
-
+            launch_agent_via_tmux(&worktree_name, &current_dir, agent)?;
             return Ok(());
         }
     }
@@ -159,27 +146,53 @@ pub fn handle_open(name: Option<String>, agent: Option<String>) -> Result<()> {
         worktree_name.cyan()
     );
 
-    // Change to worktree directory and launch Claude
-    std::env::set_current_dir(&worktree_info.path).context("Failed to change directory")?;
-
-    // Resolve global agent command with optional override
-    let (program, args) = resolve_agent_command_with_override(agent)?;
-    let mut cmd = Command::new(&program);
-    cmd.args(&args);
-
-    // Inherit all environment variables
-    cmd.envs(std::env::vars());
-
-    // If there's piped input, drain it and don't pass to Claude
+    // If there's piped input, drain it
     if is_piped_input() {
         drain_stdin()?;
-        cmd.stdin(Stdio::null());
     }
 
-    let status = cmd.status().context("Failed to launch agent")?;
+    launch_agent_via_tmux(worktree_name, &worktree_info.path, agent)?;
 
-    if !status.success() {
-        anyhow::bail!("Agent exited with error");
+    Ok(())
+}
+
+/// Launch agent in a tmux session. If session exists, attach to it; otherwise create and attach.
+fn launch_agent_via_tmux(
+    worktree_name: &str,
+    work_dir: &std::path::Path,
+    agent: Option<String>,
+) -> Result<()> {
+    let tmux = TmuxManager::new();
+
+    // Check if tmux is available
+    if !TmuxManager::is_available() {
+        anyhow::bail!(
+            "tmux is not available. Please install tmux to use this feature.\n\
+             On macOS: brew install tmux\n\
+             On Ubuntu/Debian: sudo apt install tmux"
+        );
+    }
+
+    // Use worktree name as the session identifier
+    let session_id = worktree_name;
+
+    if tmux.session_exists(session_id) {
+        // Session exists, just attach
+        println!(
+            "{} Attaching to existing tmux session...",
+            "📎".cyan()
+        );
+        tmux.attach_session(session_id)?;
+    } else {
+        // Create new session with agent
+        println!(
+            "{} Creating tmux session and starting agent...",
+            "🚀".cyan()
+        );
+
+        let (program, args) = resolve_agent_command_with_override(agent)?;
+        tmux.create_session_with_command(session_id, work_dir, &program, &args)?;
+        tmux.attach_session(session_id)?;
     }
 
     Ok(())

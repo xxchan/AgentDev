@@ -5,13 +5,13 @@ use dialoguer::Input;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::commands::open::handle_open;
-use crate::input::{get_command_arg, is_piped_input, smart_confirm};
+use crate::input::{get_command_arg, is_piped_input};
+use agentdev::tmux::TmuxManager;
 use agentdev::git::{
     execute_git, extract_repo_name_from_url, get_repo_name, list_worktrees, update_submodules,
 };
 use agentdev::state::{WorktreeInfo, XlaudeState};
-use agentdev::utils::sanitize_branch_name;
+use agentdev::utils::{resolve_agent_command_with_override, sanitize_branch_name};
 
 pub fn handle_create(name: Option<String>, agent: Option<String>) -> Result<()> {
     handle_create_in_dir(name, None, agent)
@@ -294,28 +294,44 @@ pub fn handle_create_in_dir_quiet(
         );
     }
 
-    // Ask if user wants to open the worktree (skip in quiet mode)
+    // Launch agent in tmux (detached) unless in test mode or explicitly disabled
     if !quiet {
-        // Skip opening in test mode or when explicitly disabled
-        let should_open = if std::env::var("XLAUDE_TEST_MODE").is_ok()
-            || std::env::var("XLAUDE_NO_AUTO_OPEN").is_ok()
-        {
+        let skip_launch = std::env::var("XLAUDE_TEST_MODE").is_ok()
+            || std::env::var("XLAUDE_NO_AUTO_OPEN").is_ok();
+
+        if skip_launch {
             println!(
                 "  {} To open it, run: {} {}",
                 "💡".cyan(),
                 "agentdev worktree open".cyan(),
                 worktree_name.cyan()
             );
-            false
-        } else {
-            smart_confirm("Would you like to open the worktree now?", true)?
-        };
+        } else if TmuxManager::is_available() {
+            // Launch agent in tmux detached session
+            let tmux = TmuxManager::new();
+            let (program, args) = resolve_agent_command_with_override(agent)?;
 
-        if should_open {
-            handle_open(Some(worktree_name.clone()), agent)?;
-        } else if std::env::var("XLAUDE_NON_INTERACTIVE").is_err() {
+            tmux.create_session_with_command(&worktree_name, &worktree_path, &program, &args)?;
+
             println!(
-                "  {} To open it later, run: {} {}",
+                "{} Agent started in tmux session '{}'",
+                "🚀".green(),
+                tmux.session_name(&worktree_name).cyan()
+            );
+            println!(
+                "  {} To attach, run: {} {}",
+                "💡".cyan(),
+                "agentdev worktree open".cyan(),
+                worktree_name.cyan()
+            );
+        } else {
+            // tmux not available, just show hint
+            println!(
+                "{} tmux not available, agent not started automatically",
+                "⚠️".yellow()
+            );
+            println!(
+                "  {} Install tmux, then run: {} {}",
                 "💡".cyan(),
                 "agentdev worktree open".cyan(),
                 worktree_name.cyan()
