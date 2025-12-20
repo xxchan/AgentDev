@@ -238,10 +238,10 @@ enum WorktreeCommands {
         /// Name of the worktree to merge (current if not provided)
         name: Option<String>,
         /// Push the default branch after a successful merge
-        #[arg(long)]
+        #[arg(short = 'p', long)]
         push: bool,
         /// Delete the worktree after a successful merge
-        #[arg(long)]
+        #[arg(short = 'c', long)]
         cleanup: bool,
         /// Merge strategy (defaults to ff-only unless --squash)
         #[arg(long, value_enum)]
