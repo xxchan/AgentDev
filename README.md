@@ -6,6 +6,10 @@ Features
 - Supports ANY CLI coding agents
     + Sessions UI currently supports: [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), Codex, Claude Code
 
+Blog
+- Chinese: [使用 Local Coding Agents 疯狂地并发开发](https://xxchan.me/zh/blog/2025-11-14-concurrent-local-coding-agents/)
+- English: [Concurrent Local Coding Agents](https://xxchan.me/blog/2025-11-14-concurrent-local-coding-agents/index_en/)
+
 ## Installation
 
 Prerequisites:
